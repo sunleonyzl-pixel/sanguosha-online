@@ -257,6 +257,12 @@ function renderGame() {
         myPendingResponse = true;
         responseHint = '主公发动【护驾】！请出【闪】或点击"不出"';
       }
+    } else if (pa.type === 'nullify_chance') {
+      const currentAsker = pa.askOrder[pa.currentAskerIdx];
+      if (currentAsker === state.myId) {
+        myPendingResponse = true;
+        responseHint = `是否对【${pa.trickName}】使用【无懈可击】？点击无懈可击或"不出"`;
+      }
     }
   }
 

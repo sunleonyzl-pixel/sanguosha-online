@@ -66,6 +66,22 @@ body {
   letter-spacing: 16px;
   line-height: 1.1;
 }
+.title-prefix {
+  font-family: 'ZCOOL KuaiLe', 'Ma Shan Zheng', cursive;
+  font-size: 0.45em;
+  color: var(--red-bright);
+  text-shadow:
+    0 0 20px rgba(220,53,69,0.4),
+    0 2px 4px rgba(0,0,0,0.8);
+  letter-spacing: 4px;
+  vertical-align: super;
+  margin-right: 4px;
+  background: linear-gradient(180deg, #ff6b6b, #dc3545);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6));
+}
 .game-subtitle {
   font-size: 18px;
   color: var(--gold);

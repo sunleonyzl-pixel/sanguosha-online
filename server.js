@@ -166,7 +166,12 @@ function getPlayerView(room, playerId) {
     turnPhase: room.turnPhase,
     deckCount: room.deck.length,
     log: room.log.slice(-50),
-    pendingAction: room.pendingAction,
+    pendingAction: room.pendingAction ? (() => {
+      const pa = { ...room.pendingAction };
+      delete pa.onResolve;
+      delete pa.onNullify;
+      return pa;
+    })() : null,
     turnAttackCount: room.turnAttackCount,
     turnWineUsed: room.turnWineUsed,
   };
@@ -234,12 +239,13 @@ function getDistance(room, fromIdx, toIdx) {
   const n = alive.length;
   let dist = Math.min(Math.abs(fromAliveIdx - toAliveIdx), n - Math.abs(fromAliveIdx - toAliveIdx));
   // -1 horse on attacker reduces distance
-  if (from.equipment.minusHorse) dist = Math.max(1, dist - 1);
+  if (from.equipment.minusHorse) dist -= 1;
   // 马超 马术: distance -1
-  if (from.hero === 'machao') dist = Math.max(1, dist - 1);
+  if (from.hero === 'machao') dist -= 1;
   // +1 horse on target increases distance
   if (to.equipment.plusHorse) dist += 1;
-  return dist;
+  // Minimum distance is 1
+  return Math.max(1, dist);
 }
 
 function getAttackRange(player) {
@@ -454,6 +460,84 @@ function endCurrentTurn(room) {
   }
 }
 
+// ====== NULLIFY (无懈可击) SYSTEM ======
+// Check if any player has 无懈可击 and give them a chance to use it
+function startNullifyChance(room, trickName, sourceId, targetId, onResolve, onNullify) {
+  // Find all alive players who have 无懈可击
+  const playersWithNullify = room.players.filter(p =>
+    p.alive && p.hand.some(c => c.subtype === 'nullify')
+  );
+  if (playersWithNullify.length === 0) {
+    // No one can nullify, resolve immediately
+    onResolve();
+    return;
+  }
+  // Build list of player IDs to ask, starting from the target (if any), then others in seat order
+  const askOrder = [];
+  const startIdx = targetId
+    ? room.players.findIndex(p => p.id === targetId)
+    : room.players.findIndex(p => p.id === sourceId);
+  for (let i = 0; i < room.players.length; i++) {
+    const idx = (startIdx + i) % room.players.length;
+    const p = room.players[idx];
+    if (p.alive && p.hand.some(c => c.subtype === 'nullify')) {
+      askOrder.push(p.id);
+    }
+  }
+  room.pendingAction = {
+    type: 'nullify_chance',
+    trickName,
+    sourceId,
+    targetId,
+    askOrder,
+    currentAskerIdx: 0,
+    onResolve,   // callback if no one nullifies
+    onNullify,   // callback if nullified (optional)
+  };
+  const asker = room.players.find(p => p.id === askOrder[0]);
+  addLog(room, `是否有人对【${trickName}】使用【无懈可击】？等待 ${asker.name} 决定...`);
+  broadcastState(room);
+}
+
+// AOE per-target nullify: process targets one by one with nullify chance
+function advanceAoeTarget(room, type, sourceId, targets, idx) {
+  // Skip dead targets
+  while (idx < targets.length) {
+    const t = room.players.find(p => p.id === targets[idx]);
+    if (t?.alive) break;
+    idx++;
+  }
+  if (idx >= targets.length) {
+    room.pendingAction = null;
+    broadcastState(room);
+    return;
+  }
+  const target = room.players.find(p => p.id === targets[idx]);
+  const trickName = type === 'barbarian' ? '南蛮入侵' : type === 'arrow' ? '万箭齐发' : '桃园结义';
+
+  startNullifyChance(room, `${trickName}→${target.name}`, sourceId, target.id, () => {
+    // Not nullified
+    if (type === 'peachgarden') {
+      if (target.hp < target.maxHp) {
+        target.hp++;
+        addLog(room, `${target.name} 回复1点体力`);
+      }
+      advanceAoeTarget(room, type, sourceId, targets, idx + 1);
+    } else {
+      // barbarian or arrow: need target to respond
+      room.pendingAction = {
+        type, source: sourceId, targets, currentIdx: idx,
+        aoeAdvance: true, // flag for response handler to use advanceAoeTarget
+      };
+      broadcastState(room);
+    }
+  }, () => {
+    // Nullified for this target only
+    addLog(room, `${target.name} 不受【${trickName}】影响`);
+    advanceAoeTarget(room, type, sourceId, targets, idx + 1);
+  });
+}
+
 function handlePlayCard(room, player, data) {
   const { cardId, targetId, responseCardId } = data;
 
@@ -562,7 +646,6 @@ function handlePlayCard(room, player, data) {
 
     case 'duel': {
       if (!target || !target.alive || target.id === player.id) return;
-      // 诸葛亮 空城: cannot be targeted by 决斗 when no hand cards
       if (target.hero === 'zhugeliang' && target.hand.length === 0) {
         io.sockets.sockets.get(player.socketId)?.emit('error', '诸葛亮【空城】：无手牌时不能被决斗指定');
         return;
@@ -570,10 +653,11 @@ function handlePlayCard(room, player, data) {
       removeCardFromHand(player, card.id);
       room.discard.push(card);
       addLog(room, `${player.name} 对 ${target.name} 使用了【决斗】`);
-      // 黄月英 集智
       if (player.hero === 'huangyueying') { drawCards(room, player, 1); addLog(room, `黄月英【集智】发动，摸一张牌`); }
-      room.pendingAction = { type: 'duel', players: [target.id, player.id], currentIdx: 0, source: player.id };
-      broadcastState(room);
+      startNullifyChance(room, '决斗', player.id, target.id, () => {
+        room.pendingAction = { type: 'duel', players: [target.id, player.id], currentIdx: 0, source: player.id };
+        broadcastState(room);
+      });
       break;
     }
 
@@ -581,11 +665,9 @@ function handlePlayCard(room, player, data) {
       removeCardFromHand(player, card.id);
       room.discard.push(card);
       addLog(room, `${player.name} 使用了【南蛮入侵】`);
-      // 黄月英 集智
       if (player.hero === 'huangyueying') { drawCards(room, player, 1); addLog(room, `黄月英【集智】发动，摸一张牌`); }
       const targets = room.players.filter(p => p.alive && p.id !== player.id);
-      room.pendingAction = { type: 'barbarian', source: player.id, targets: targets.map(t => t.id), currentIdx: 0 };
-      broadcastState(room);
+      advanceAoeTarget(room, 'barbarian', player.id, targets.map(t => t.id), 0);
       break;
     }
 
@@ -593,22 +675,22 @@ function handlePlayCard(room, player, data) {
       removeCardFromHand(player, card.id);
       room.discard.push(card);
       addLog(room, `${player.name} 使用了【万箭齐发】`);
-      // 黄月英 集智
       if (player.hero === 'huangyueying') { drawCards(room, player, 1); addLog(room, `黄月英【集智】发动，摸一张牌`); }
       const arrowTargets = room.players.filter(p => p.alive && p.id !== player.id);
-      room.pendingAction = { type: 'arrow', source: player.id, targets: arrowTargets.map(t => t.id), currentIdx: 0 };
-      broadcastState(room);
+      advanceAoeTarget(room, 'arrow', player.id, arrowTargets.map(t => t.id), 0);
       break;
     }
 
     case 'draw2': {
       removeCardFromHand(player, card.id);
       room.discard.push(card);
-      drawCards(room, player, 2);
-      addLog(room, `${player.name} 使用了【无中生有】，摸了2张牌`);
-      // 黄月英 集智
+      addLog(room, `${player.name} 使用了【无中生有】`);
       if (player.hero === 'huangyueying') { drawCards(room, player, 1); addLog(room, `黄月英【集智】发动，摸一张牌`); }
-      broadcastState(room);
+      startNullifyChance(room, '无中生有', player.id, player.id, () => {
+        drawCards(room, player, 2);
+        addLog(room, `${player.name} 摸了2张牌`);
+        broadcastState(room);
+      });
       break;
     }
 
@@ -620,35 +702,37 @@ function handlePlayCard(room, player, data) {
       }
       removeCardFromHand(player, card.id);
       room.discard.push(card);
-      // Remove a random card/equipment from target
-      const options = [...target.hand];
-      if (target.equipment.weapon) options.push(target.equipment.weapon);
-      if (target.equipment.armor) options.push(target.equipment.armor);
-      if (target.equipment.plusHorse) options.push(target.equipment.plusHorse);
-      if (target.equipment.minusHorse) options.push(target.equipment.minusHorse);
-      const chosen = options[Math.floor(Math.random() * options.length)];
-      if (target.hand.includes(chosen)) {
-        removeCardFromHand(target, chosen.id);
-      } else if (target.equipment.weapon?.id === chosen.id) {
-        target.equipment.weapon = null;
-      } else if (target.equipment.armor?.id === chosen.id) {
-        target.equipment.armor = null;
-      } else if (target.equipment.plusHorse?.id === chosen.id) {
-        target.equipment.plusHorse = null;
-      } else if (target.equipment.minusHorse?.id === chosen.id) {
-        target.equipment.minusHorse = null;
-      }
-      room.discard.push(chosen);
-      addLog(room, `${player.name} 对 ${target.name} 使用【过河拆桥】，拆掉了一张${chosen.name}`);
-      // 黄月英 集智
+      addLog(room, `${player.name} 对 ${target.name} 使用【过河拆桥】`);
       if (player.hero === 'huangyueying') { drawCards(room, player, 1); addLog(room, `黄月英【集智】发动，摸一张牌`); }
-      broadcastState(room);
+      const dismantleTarget = target;
+      startNullifyChance(room, '过河拆桥', player.id, target.id, () => {
+        const options = [...dismantleTarget.hand];
+        if (dismantleTarget.equipment.weapon) options.push(dismantleTarget.equipment.weapon);
+        if (dismantleTarget.equipment.armor) options.push(dismantleTarget.equipment.armor);
+        if (dismantleTarget.equipment.plusHorse) options.push(dismantleTarget.equipment.plusHorse);
+        if (dismantleTarget.equipment.minusHorse) options.push(dismantleTarget.equipment.minusHorse);
+        if (options.length === 0) { broadcastState(room); return; }
+        const chosen = options[Math.floor(Math.random() * options.length)];
+        if (dismantleTarget.hand.includes(chosen)) {
+          removeCardFromHand(dismantleTarget, chosen.id);
+        } else if (dismantleTarget.equipment.weapon?.id === chosen.id) {
+          dismantleTarget.equipment.weapon = null;
+        } else if (dismantleTarget.equipment.armor?.id === chosen.id) {
+          dismantleTarget.equipment.armor = null;
+        } else if (dismantleTarget.equipment.plusHorse?.id === chosen.id) {
+          dismantleTarget.equipment.plusHorse = null;
+        } else if (dismantleTarget.equipment.minusHorse?.id === chosen.id) {
+          dismantleTarget.equipment.minusHorse = null;
+        }
+        room.discard.push(chosen);
+        addLog(room, `拆掉了 ${dismantleTarget.name} 的${chosen.name}`);
+        broadcastState(room);
+      });
       break;
     }
 
     case 'snatch': {
       if (!target || !target.alive || target.id === player.id) return;
-      // 陆逊 谦逊
       if (target.hero === 'luxun') {
         io.sockets.sockets.get(player.socketId)?.emit('error', '陆逊【谦逊】不能被顺手牵羊指定');
         return;
@@ -662,44 +746,43 @@ function handlePlayCard(room, player, data) {
       if (target.hand.length === 0 && !target.equipment.weapon && !target.equipment.armor && !target.equipment.plusHorse && !target.equipment.minusHorse) return;
       removeCardFromHand(player, card.id);
       room.discard.push(card);
-      const opts = [...target.hand];
-      if (target.equipment.weapon) opts.push(target.equipment.weapon);
-      if (target.equipment.armor) opts.push(target.equipment.armor);
-      if (target.equipment.plusHorse) opts.push(target.equipment.plusHorse);
-      if (target.equipment.minusHorse) opts.push(target.equipment.minusHorse);
-      const pick = opts[Math.floor(Math.random() * opts.length)];
-      if (target.hand.includes(pick)) {
-        removeCardFromHand(target, pick.id);
-      } else if (target.equipment.weapon?.id === pick.id) {
-        target.equipment.weapon = null;
-      } else if (target.equipment.armor?.id === pick.id) {
-        target.equipment.armor = null;
-      } else if (target.equipment.plusHorse?.id === pick.id) {
-        target.equipment.plusHorse = null;
-      } else if (target.equipment.minusHorse?.id === pick.id) {
-        target.equipment.minusHorse = null;
-      }
-      player.hand.push(pick);
-      addLog(room, `${player.name} 对 ${target.name} 使用【顺手牵羊】，获得了一张牌`);
-      // 黄月英 集智
+      addLog(room, `${player.name} 对 ${target.name} 使用【顺手牵羊】`);
       if (player.hero === 'huangyueying') { drawCards(room, player, 1); addLog(room, `黄月英【集智】发动，摸一张牌`); }
-      broadcastState(room);
+      const snatchTarget = target;
+      const snatchPlayer = player;
+      startNullifyChance(room, '顺手牵羊', player.id, target.id, () => {
+        const opts = [...snatchTarget.hand];
+        if (snatchTarget.equipment.weapon) opts.push(snatchTarget.equipment.weapon);
+        if (snatchTarget.equipment.armor) opts.push(snatchTarget.equipment.armor);
+        if (snatchTarget.equipment.plusHorse) opts.push(snatchTarget.equipment.plusHorse);
+        if (snatchTarget.equipment.minusHorse) opts.push(snatchTarget.equipment.minusHorse);
+        if (opts.length === 0) { broadcastState(room); return; }
+        const pick = opts[Math.floor(Math.random() * opts.length)];
+        if (snatchTarget.hand.includes(pick)) {
+          removeCardFromHand(snatchTarget, pick.id);
+        } else if (snatchTarget.equipment.weapon?.id === pick.id) {
+          snatchTarget.equipment.weapon = null;
+        } else if (snatchTarget.equipment.armor?.id === pick.id) {
+          snatchTarget.equipment.armor = null;
+        } else if (snatchTarget.equipment.plusHorse?.id === pick.id) {
+          snatchTarget.equipment.plusHorse = null;
+        } else if (snatchTarget.equipment.minusHorse?.id === pick.id) {
+          snatchTarget.equipment.minusHorse = null;
+        }
+        snatchPlayer.hand.push(pick);
+        addLog(room, `${snatchPlayer.name} 获得了 ${snatchTarget.name} 的一张牌`);
+        broadcastState(room);
+      });
       break;
     }
 
     case 'peachgarden': {
       removeCardFromHand(player, card.id);
       room.discard.push(card);
-      room.players.filter(p => p.alive).forEach(p => {
-        if (p.hp < p.maxHp) {
-          p.hp++;
-          addLog(room, `${p.name} 回复1点体力`);
-        }
-      });
       addLog(room, `${player.name} 使用了【桃园结义】`);
-      // 黄月英 集智
       if (player.hero === 'huangyueying') { drawCards(room, player, 1); addLog(room, `黄月英【集智】发动，摸一张牌`); }
-      broadcastState(room);
+      const peachTargets = room.players.filter(p => p.alive);
+      advanceAoeTarget(room, 'peachgarden', player.id, peachTargets.map(t => t.id), 0);
       break;
     }
 
@@ -757,17 +840,23 @@ function handlePlayCard(room, player, data) {
         io.sockets.sockets.get(player.socketId)?.emit('error', '请选择一个目标');
         return;
       }
-      // 陆逊 谦逊
       if (target.hero === 'luxun') {
         io.sockets.sockets.get(player.socketId)?.emit('error', '陆逊【谦逊】不能被乐不思蜀指定');
         return;
       }
       removeCardFromHand(player, card.id);
-      target.judgments.push(card);
       addLog(room, `${player.name} 对 ${target.name} 使用了【乐不思蜀】`);
-      // 黄月英 集智
       if (player.hero === 'huangyueying') { drawCards(room, player, 1); addLog(room, `黄月英【集智】发动，摸一张牌`); }
-      broadcastState(room);
+      const indulgenceTarget = target;
+      const indulgenceCard = card;
+      startNullifyChance(room, '乐不思蜀', player.id, target.id, () => {
+        indulgenceTarget.judgments.push(indulgenceCard);
+        broadcastState(room);
+      }, () => {
+        // Nullified: card goes to discard
+        room.discard.push(indulgenceCard);
+        broadcastState(room);
+      });
       break;
     }
 
@@ -785,6 +874,41 @@ function handlePlayCard(room, player, data) {
 function handleResponse(room, player, data) {
   const pa = room.pendingAction;
   if (!pa) return;
+
+  // ====== 无懈可击 (Nullify) chance ======
+  if (pa.type === 'nullify_chance') {
+    const currentAskerId = pa.askOrder[pa.currentAskerIdx];
+    if (player.id !== currentAskerId) return;
+
+    if (data.responseCardId) {
+      const nullifyCard = player.hand.find(c => c.id === data.responseCardId && c.subtype === 'nullify');
+      if (!nullifyCard) {
+        io.sockets.sockets.get(player.socketId)?.emit('error', '请使用【无懈可击】');
+        return;
+      }
+      removeCardFromHand(player, nullifyCard.id);
+      room.discard.push(nullifyCard);
+      addLog(room, `${player.name} 使用了【无懈可击】，抵消了【${pa.trickName}】`);
+      // 黄月英 集智
+      if (player.hero === 'huangyueying') { drawCards(room, player, 1); addLog(room, `黄月英【集智】发动，摸一张牌`); }
+      room.pendingAction = null;
+      if (pa.onNullify) pa.onNullify();
+      broadcastState(room);
+    } else {
+      // Pass - move to next player
+      pa.currentAskerIdx++;
+      if (pa.currentAskerIdx >= pa.askOrder.length) {
+        // No one nullified, resolve the trick
+        room.pendingAction = null;
+        pa.onResolve();
+      } else {
+        const nextAsker = room.players.find(p => p.id === pa.askOrder[pa.currentAskerIdx]);
+        addLog(room, `${player.name} 放弃使用无懈可击。等待 ${nextAsker.name} 决定...`);
+        broadcastState(room);
+      }
+    }
+    return;
+  }
 
   // ====== 激将 (Jijiang) - Lord Liu Bei asks Shu allies for 杀 ======
   if (pa.type === 'jijiang') {
@@ -1126,15 +1250,20 @@ function handleResponse(room, player, data) {
       checkDeath(room, player, source);
     }
 
-    pa.currentIdx++;
-    // Skip dead players
-    while (pa.currentIdx < pa.targets.length && !room.players.find(p => p.id === pa.targets[pa.currentIdx])?.alive) {
+    // Advance to next target with per-target nullify chance
+    if (pa.aoeAdvance) {
+      advanceAoeTarget(room, pa.type, pa.source, pa.targets, pa.currentIdx + 1);
+    } else {
+      // Legacy fallback
       pa.currentIdx++;
+      while (pa.currentIdx < pa.targets.length && !room.players.find(p => p.id === pa.targets[pa.currentIdx])?.alive) {
+        pa.currentIdx++;
+      }
+      if (pa.currentIdx >= pa.targets.length) {
+        room.pendingAction = null;
+      }
+      broadcastState(room);
     }
-    if (pa.currentIdx >= pa.targets.length) {
-      room.pendingAction = null;
-    }
-    broadcastState(room);
     return;
   }
 }
