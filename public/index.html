@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>三国杀 · 在线对战</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Serif+SC:wght@400;700;900&family=ZCOOL+KuaiLe&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <!-- LOBBY SCREEN -->
+  <div id="lobby" class="screen active">
+    <div class="lobby-bg"></div>
+    <div class="lobby-content">
+      <div class="title-group">
+        <div class="title-deco">━━━ ⚔ ━━━</div>
+        <h1 class="game-title">三國殺</h1>
+        <p class="game-subtitle">群雄逐鹿 · 在线对战</p>
+        <div class="title-deco">━━━ ⚔ ━━━</div>
+      </div>
+      <div class="lobby-form">
+        <div class="input-group">
+          <label>你的名号</label>
+          <input type="text" id="playerName" placeholder="请输入名号..." maxlength="8" />
+        </div>
+        <div class="lobby-actions">
+          <button id="btnCreate" class="btn btn-primary">创建房间</button>
+          <div class="divider-text">或</div>
+          <div class="join-group">
+            <input type="text" id="roomCode" placeholder="房间号" maxlength="2" />
+            <button id="btnJoin" class="btn btn-secondary">加入</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WAITING ROOM -->
+  <div id="waiting" class="screen">
+    <div class="waiting-panel">
+      <h2>等待大厅</h2>
+      <div class="room-code">房间号: <span id="displayRoomCode">------</span></div>
+      <div id="playerList" class="player-list"></div>
+      <div class="waiting-hint">需要 2~4 名玩家</div>
+      <button id="btnStart" class="btn btn-primary">开始游戏</button>
+    </div>
+  </div>
+
+  <!-- HERO SELECT -->
+  <div id="heroSelect" class="screen">
+    <div class="hero-select-panel">
+      <h2>选择武将</h2>
+      <div class="role-reveal">你的身份: <span id="myRole">---</span></div>
+      <div id="heroGrid" class="hero-grid"></div>
+    </div>
+  </div>
+
+  <!-- GAME BOARD -->
+  <div id="gameBoard" class="screen">
+    <div class="game-layout">
+      <!-- Other players -->
+      <div id="otherPlayers" class="other-players"></div>
+
+      <!-- Center area -->
+      <div class="center-area">
+        <div class="deck-info">
+          牌堆: <span id="deckCount">0</span> 张
+        </div>
+        <div id="gameLog" class="game-log"></div>
+        <div id="actionHint" class="action-hint"></div>
+        <div class="action-buttons">
+          <button id="btnEndTurn" class="btn btn-gold">结束回合</button>
+          <button id="btnSkill" class="btn btn-skill" style="display:none">武将技能</button>
+          <button id="btnJijiang" class="btn btn-lord" style="display:none">激将</button>
+          <button id="btnHujia" class="btn btn-lord" style="display:none">护驾</button>
+          <button id="btnConfirmDiscard" class="btn btn-discard" style="display:none">确认弃牌</button>
+          <button id="btnRespond" class="btn btn-danger" style="display:none">不出</button>
+        </div>
+      </div>
+
+      <!-- My area -->
+      <div id="myArea" class="my-area">
+        <div id="myInfo" class="my-info"></div>
+        <div id="myHand" class="my-hand"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GAME OVER -->
+  <div id="gameOver" class="screen">
+    <div class="gameover-panel">
+      <h2 id="winnerText">游戏结束</h2>
+      <div id="finalRoles" class="final-roles"></div>
+      <button id="btnBackLobby" class="btn btn-primary">返回大厅</button>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
