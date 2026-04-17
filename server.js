@@ -470,7 +470,7 @@ function startTurn(room) {
   processNextJudgment(room, player, judgmentsToProcess, 0);
 }
 
-// Async judgment processing (supports 鬼才 interruption)
+// Async judgment processing (supports 鬼才 interruption and 无懈可击)
 function processNextJudgment(room, player, judgments, idx) {
   const js = room._judgmentState;
 
@@ -488,36 +488,49 @@ function processNextJudgment(room, player, judgments, idx) {
   }
 
   const judgeCard = judgments[idx];
-  const judgeResult = room.deck.length > 0 ? room.deck.pop() : null;
-  if (!judgeResult) {
-    js.remaining.push(judgeCard);
-    player.judgments = js.remaining;
-    finishJudgmentPhase(room, player, js.skipPlayPhase, js.skipDrawPhase);
-    return;
-  }
+  const trickName = judgeCard.subtype === 'lightning' ? '闪电'
+    : judgeCard.subtype === 'indulgence' ? '乐不思蜀'
+    : judgeCard.subtype === 'famine' ? '兵粮寸断' : judgeCard.name;
 
-  // Check if 司马懿 can use 鬼才
-  const simayi = room.players.find(p => p.hero === 'simayi' && p.alive && p.hand.length > 0);
-  if (simayi) {
-    // Store context and ask Sima Yi
-    room.discard.push(judgeResult); // temporarily put in discard
-    room.pendingAction = {
-      type: 'guicai',
-      simayiId: simayi.id,
-      playerId: player.id,
-      judgeCard,
-      judgeResult,
-      judgments,
-      judgmentIdx: idx,
-      trickName: judgeCard.name,
-    };
-    addLog(room, `${player.name} 的【${judgeCard.name}】判定为 ${judgeResult.suit}${judgeResult.number}，等待${simayi.name}是否发动【鬼才】...`);
+  // Give players a chance to use 无懈可击 before judgment resolves
+  startNullifyChance(room, trickName, null, player.id, () => {
+    // Not nullified — proceed with judgment
+    const judgeResult = room.deck.length > 0 ? room.deck.pop() : null;
+    if (!judgeResult) {
+      js.remaining.push(judgeCard);
+      player.judgments = js.remaining;
+      finishJudgmentPhase(room, player, js.skipPlayPhase, js.skipDrawPhase);
+      return;
+    }
+
+    // Check if 司马懿 can use 鬼才
+    const simayi = room.players.find(p => p.hero === 'simayi' && p.alive && p.hand.length > 0);
+    if (simayi) {
+      room.discard.push(judgeResult);
+      room.pendingAction = {
+        type: 'guicai',
+        simayiId: simayi.id,
+        playerId: player.id,
+        judgeCard,
+        judgeResult,
+        judgments,
+        judgmentIdx: idx,
+        trickName: judgeCard.name,
+      };
+      addLog(room, `${player.name} 的【${judgeCard.name}】判定为 ${judgeResult.suit}${judgeResult.number}，等待${simayi.name}是否发动【鬼才】...`);
+      broadcastState(room);
+      return;
+    }
+
+    // No Sima Yi — resolve directly
+    resolveJudgment(room, player, judgeCard, judgeResult, judgments, idx);
+  }, () => {
+    // Nullified — skip this judgment, discard the delayed trick card
+    room.discard.push(judgeCard);
+    addLog(room, `【${trickName}】被无懈可击抵消，不进行判定`);
     broadcastState(room);
-    return;
-  }
-
-  // No Sima Yi — resolve directly
-  resolveJudgment(room, player, judgeCard, judgeResult, judgments, idx);
+    processNextJudgment(room, player, judgments, idx + 1);
+  });
 }
 
 function resolveJudgment(room, player, judgeCard, judgeResult, judgments, idx) {
