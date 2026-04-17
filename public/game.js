@@ -218,13 +218,18 @@ const CardAnnounce = (() => {
 const SpeechEngine = (() => {
   let unlocked = false;
   let zhVoice = null;
+  let voicesReady = false;
 
   function findVoice() {
     if (typeof speechSynthesis === 'undefined') return;
     const voices = speechSynthesis.getVoices();
-    // Prefer zh-CN, fallback to any zh
+    if (voices.length === 0) return;
+    voicesReady = true;
+    // Prefer zh-CN, fallback to any zh, then any voice
     zhVoice = voices.find(v => v.lang === 'zh-CN')
            || voices.find(v => v.lang.startsWith('zh'))
+           || voices.find(v => v.lang === 'en-US')
+           || voices[0]
            || null;
   }
 
@@ -232,27 +237,36 @@ const SpeechEngine = (() => {
   if (typeof speechSynthesis !== 'undefined') {
     findVoice();
     speechSynthesis.onvoiceschanged = findVoice;
+    // Some browsers need a polling fallback
+    let retries = 0;
+    const pollVoices = setInterval(() => {
+      findVoice();
+      retries++;
+      if (voicesReady || retries > 20) clearInterval(pollVoices);
+    }, 250);
   }
 
   return {
     unlock() {
-      // Must be called from a user gesture (click) to unlock speech
-      if (unlocked) return;
       if (typeof speechSynthesis === 'undefined') return;
-      unlocked = true;
-      findVoice();
-      // Speak a silent utterance to unlock the API
-      const u = new SpeechSynthesisUtterance('');
-      u.volume = 0;
-      u.lang = 'zh-CN';
-      speechSynthesis.speak(u);
+      if (!unlocked) {
+        unlocked = true;
+        findVoice();
+        // Speak a silent utterance to unlock the API
+        const u = new SpeechSynthesisUtterance('');
+        u.volume = 0;
+        u.lang = 'zh-CN';
+        speechSynthesis.speak(u);
+      }
     },
     speak(text) {
       if (!unlocked || typeof speechSynthesis === 'undefined') return;
+      // Re-find voice if not ready yet
+      if (!voicesReady) findVoice();
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'zh-CN';
-      u.rate = 1.0;
+      u.rate = 1.1;
       u.pitch = 1.0;
       u.volume = 1.0;
       if (zhVoice) u.voice = zhVoice;
@@ -265,10 +279,10 @@ function speakText(text) {
   SpeechEngine.speak(text);
 }
 
-// Unlock speech on first user click
-document.addEventListener('click', function unlockSpeech() {
-  SpeechEngine.unlock();
-}, { once: true });
+// Unlock speech on user interactions (click/touch/keydown)
+['click', 'touchstart', 'keydown'].forEach(evt => {
+  document.addEventListener(evt, () => SpeechEngine.unlock(), { once: true });
+});
 
 // Listen for card sound events from server
 socket.on('cardSound', (text) => {
@@ -278,15 +292,63 @@ socket.on('cardSound', (text) => {
 
 
 // ====== HERO DATA (client side) ======
-const HERO_PORTRAITS = {
-  liubei:'🐉', guanyu:'⚔️', zhangfei:'🔥', zhugeliang:'🪶', zhaoyun:'🐴',
-  machao:'🏇', huangyueying:'📜',
-  caocao:'🦅', simayi:'🦊', xiaohoudun:'🗡️', zhangliao:'🏹', xuchu:'💪',
-  guojia:'🎭', zhenji:'🌙',
-  sunquan:'🐯', ganning:'⚓', lvmeng:'📖', huanggai:'🔥', zhouyu:'🎵',
-  daqiao:'🌸', luxun:'📚', sunshangxiang:'🏹',
-  lvbu:'👹', huatuo:'💊', diaochan:'🌺', huaxiong:'⚔️',
+
+// Kingdom color schemes for SVG portraits
+const KINGDOM_COLORS = {
+  '蜀': { bg: '#b8342a', ring: '#e8534a', text: '#fff' },
+  '魏': { bg: '#2a5fa8', ring: '#4a8ae8', text: '#fff' },
+  '吴': { bg: '#1a8a4a', ring: '#3ab86a', text: '#fff' },
+  '群': { bg: '#7a5a2a', ring: '#a88a4a', text: '#fff' },
 };
+const HERO_KINGDOM_MAP = {
+  liubei:'蜀', guanyu:'蜀', zhangfei:'蜀', zhugeliang:'蜀', zhaoyun:'蜀', machao:'蜀', huangyueying:'蜀',
+  caocao:'魏', simayi:'魏', xiaohoudun:'魏', zhangliao:'魏', xuchu:'魏', guojia:'魏', zhenji:'魏',
+  sunquan:'吴', ganning:'吴', lvmeng:'吴', huanggai:'吴', zhouyu:'吴', daqiao:'吴', luxun:'吴', sunshangxiang:'吴',
+  lvbu:'群', huatuo:'群', diaochan:'群', huaxiong:'群',
+};
+const HERO_CHAR = {
+  liubei:'备', guanyu:'羽', zhangfei:'飞', zhugeliang:'亮', zhaoyun:'云',
+  machao:'超', huangyueying:'英',
+  caocao:'操', simayi:'懿', xiaohoudun:'惇', zhangliao:'辽', xuchu:'褚',
+  guojia:'嘉', zhenji:'姬',
+  sunquan:'权', ganning:'宁', lvmeng:'蒙', huanggai:'盖', zhouyu:'瑜',
+  daqiao:'乔', luxun:'逊', sunshangxiang:'香',
+  lvbu:'布', huatuo:'佗', diaochan:'蝉', huaxiong:'雄',
+};
+
+function heroPortraitSVG(heroKey, size) {
+  const kingdom = HERO_KINGDOM_MAP[heroKey] || '群';
+  const colors = KINGDOM_COLORS[kingdom];
+  const ch = HERO_CHAR[heroKey] || '?';
+  const s = size || 48;
+  const half = s / 2;
+  const fontSize = Math.round(s * 0.5);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">
+    <defs>
+      <radialGradient id="g_${heroKey}" cx="40%" cy="35%" r="60%">
+        <stop offset="0%" stop-color="${colors.ring}"/>
+        <stop offset="100%" stop-color="${colors.bg}"/>
+      </radialGradient>
+    </defs>
+    <circle cx="${half}" cy="${half}" r="${half-1}" fill="url(#g_${heroKey})" stroke="${colors.ring}" stroke-width="1.5"/>
+    <text x="${half}" y="${half}" text-anchor="middle" dominant-baseline="central"
+      font-family="'Ma Shan Zheng','STKaiti','KaiTi',serif" font-size="${fontSize}" fill="${colors.text}"
+      style="text-shadow:0 1px 2px rgba(0,0,0,0.3)">${ch}</text>
+  </svg>`;
+}
+
+const HERO_PORTRAITS = {};
+Object.keys(HERO_CHAR).forEach(k => { HERO_PORTRAITS[k] = heroPortraitSVG(k, 48); });
+
+// Smaller version for opponent panels
+function heroPortraitSmall(heroKey) {
+  return heroPortraitSVG(heroKey, 36);
+}
+// Larger version for hero selection
+function heroPortraitLarge(heroKey) {
+  return heroPortraitSVG(heroKey, 72);
+}
+
 const HERO_NAMES = {
   liubei:'刘备', guanyu:'关羽', zhangfei:'张飞', zhugeliang:'诸葛亮', zhaoyun:'赵云',
   machao:'马超', huangyueying:'黄月英',
@@ -576,7 +638,7 @@ function renderHeroSelect() {
 
   grid.innerHTML = heroes.map(h => {
     return `<div class="hero-card" data-hero="${h.key}">
-      <div class="hero-portrait">${HERO_PORTRAITS[h.key]}</div>
+      <div class="hero-portrait">${heroPortraitLarge(h.key)}</div>
       <div class="hero-name">${h.name}</div>
       <div class="hero-kingdom">${h.kingdom}</div>
       <div class="hero-stats">❤ ${h.hp}</div>
@@ -723,9 +785,11 @@ function renderGame() {
       roleBadge = `<span class="opp-role-badge ${ROLE_CLASS[p.role]}">${ROLE_NAMES[p.role]}</span>`;
     }
 
-    return `<div class="opponent-card ${isCurrent?'is-current':''} ${isDead?'is-dead':''} ${canTarget?'is-target-selectable':''}" data-pid="${p.id}">
+    const isLowHp = p.alive && p.hp <= 1 && p.hp > 0;
+
+    return `<div class="opponent-card ${isCurrent?'is-current':''} ${isDead?'is-dead':''} ${canTarget?'is-target-selectable':''} ${isLowHp?'low-hp':''}" data-pid="${p.id}">
       <div class="opp-header">
-        <div class="opp-portrait">${p.hero ? HERO_PORTRAITS[p.hero] : '?'}</div>
+        <div class="opp-portrait">${p.hero ? heroPortraitSmall(p.hero) : '?'}</div>
         <div>
           <div class="opp-name">${p.name} ${roleBadge}</div>
           <div class="opp-hero">${p.hero ? HERO_NAMES[p.hero] : ''} ${p.skill ? '【'+p.skill+'】' : ''}</div>
@@ -1042,9 +1106,16 @@ function renderGame() {
   if (me.equipment?.minusHorse) myEquip += `🐎-1 ${me.equipment.minusHorse.name} `;
   let myJudge = (me.judgments && me.judgments.length > 0) ? me.judgments.map(j => `📜${j.name}`).join(' ') : '';
   const wineActive = state.turnWineUsed && isMyTurn;
+  const myLowHp = me.alive !== false && me.hp <= 1 && me.hp > 0;
+
+  // Apply low-hp class to my area
+  const myAreaEl = document.getElementById('myArea');
+  if (myAreaEl) {
+    myAreaEl.classList.toggle('low-hp', myLowHp);
+  }
 
   $('#myInfo').innerHTML = `
-    <div class="my-portrait">${me.hero ? HERO_PORTRAITS[me.hero] : '?'}</div>
+    <div class="my-portrait">${me.hero ? heroPortraitSVG(me.hero, 48) : '?'}</div>
     <div class="my-details">
       <div class="my-name-hero">
         ${me.name}
@@ -1182,3 +1253,113 @@ function renderGameOver() {
     </div>`
   ).join('');
 }
+
+// ====== GAME BOARD WATERMARK (Canvas) ======
+(function drawWatermark() {
+  const canvas = document.getElementById('gameBoardWatermark');
+  if (!canvas) return;
+
+  function render() {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, H);
+
+    // Calligraphy characters scattered across the board
+    const chars = [
+      { ch:'魏', color:'rgba(41,95,168,0.07)', size: 52 },
+      { ch:'蜀', color:'rgba(184,52,42,0.07)', size: 50 },
+      { ch:'吴', color:'rgba(26,138,74,0.07)', size: 48 },
+      { ch:'忠', color:'rgba(160,130,80,0.055)', size: 40 },
+      { ch:'义', color:'rgba(160,130,80,0.055)', size: 38 },
+      { ch:'勇', color:'rgba(160,130,80,0.055)', size: 42 },
+      { ch:'智', color:'rgba(160,130,80,0.055)', size: 36 },
+      { ch:'信', color:'rgba(160,130,80,0.05)', size: 34 },
+      { ch:'仁', color:'rgba(160,130,80,0.05)', size: 36 },
+      { ch:'德', color:'rgba(160,130,80,0.05)', size: 38 },
+    ];
+
+    // Tile the characters across the canvas
+    const tileW = 420, tileH = 400;
+    const positions = [
+      [0.07, 0.12], [0.50, 0.22], [0.82, 0.10],
+      [0.25, 0.42], [0.65, 0.48],
+      [0.12, 0.70], [0.45, 0.75],
+      [0.80, 0.68], [0.30, 0.92], [0.70, 0.90]
+    ];
+
+    for (let tx = -tileW; tx < W + tileW; tx += tileW) {
+      for (let ty = -tileH; ty < H + tileH; ty += tileH) {
+        chars.forEach((item, i) => {
+          const x = tx + positions[i][0] * tileW;
+          const y = ty + positions[i][1] * tileH;
+          if (x < -60 || x > W + 60 || y < -60 || y > H + 60) return;
+
+          ctx.save();
+          ctx.translate(x, y);
+          // Slight rotation for natural feel
+          ctx.rotate((Math.sin(i * 1.7 + tx * 0.001) * 0.15));
+          ctx.font = item.size + "px 'Ma Shan Zheng', 'STKaiti', 'KaiTi', serif";
+          ctx.fillStyle = item.color;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(item.ch, 0, 0);
+          ctx.restore();
+        });
+
+        // Decorative circles (seal motifs)
+        const seals = [
+          { x: 0.38, y: 0.58, r: 22, color: 'rgba(184,134,11,0.035)' },
+          { x: 0.85, y: 0.35, r: 26, color: 'rgba(192,57,43,0.03)' },
+          { x: 0.18, y: 0.30, r: 18, color: 'rgba(39,174,96,0.03)' },
+        ];
+        seals.forEach(s => {
+          const sx = tx + s.x * tileW;
+          const sy = ty + s.y * tileH;
+          if (sx < -40 || sx > W + 40 || sy < -40 || sy > H + 40) return;
+          ctx.beginPath();
+          ctx.arc(sx, sy, s.r, 0, Math.PI * 2);
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(sx, sy, s.r * 0.6, 0, Math.PI * 2);
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        });
+
+        // Decorative horizontal lines
+        const lines = [
+          { x1: 0.22, x2: 0.38, y: 0.28 },
+          { x1: 0.58, x2: 0.76, y: 0.62 },
+        ];
+        lines.forEach(l => {
+          const lx1 = tx + l.x1 * tileW;
+          const lx2 = tx + l.x2 * tileW;
+          const ly = ty + l.y * tileH;
+          ctx.beginPath();
+          ctx.moveTo(lx1, ly);
+          ctx.lineTo(lx2, ly);
+          ctx.strokeStyle = 'rgba(184,134,11,0.035)';
+          ctx.lineWidth = 0.6;
+          ctx.stroke();
+        });
+      }
+    }
+  }
+
+  // Wait for fonts to load, then render
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(render);
+  } else {
+    setTimeout(render, 800);
+  }
+  window.addEventListener('resize', render);
+})();
