@@ -351,41 +351,57 @@ function getAttackRange(player) {
 
 function checkDeath(room, player, killer) {
   if (player.hp <= 0) {
-    // Ask for peach (simplified: auto-use if available)
-    const peach = player.hand.find(c => c.subtype === 'peach');
-    if (peach) {
-      removeCardFromHand(player, peach.id);
-      room.discard.push(peach);
-      checkLianying(room, player);
-      player.hp = 1;
-      addLog(room, `${player.name} 使用【桃】自救，回复至1点体力`);
-      return false;
+    // Need (1 - hp) peaches to survive (e.g. hp=-1 needs 2 peaches)
+    const peachesNeeded = 1 - player.hp;
+
+    // Try self-rescue: use peaches first, then wine
+    let rescued = false;
+    for (let i = 0; i < peachesNeeded && !rescued; ) {
+      const peach = player.hand.find(c => c.subtype === 'peach');
+      if (peach) {
+        removeCardFromHand(player, peach.id);
+        room.discard.push(peach);
+        checkLianying(room, player);
+        player.hp += 1;
+        addLog(room, `${player.name} 使用【桃】自救，体力值: ${player.hp}/${player.maxHp}`);
+        if (player.hp > 0) { rescued = true; break; }
+        i++;
+        continue;
+      }
+      // Try wine only if still dying
+      const wine = player.hand.find(c => c.subtype === 'wine');
+      if (wine) {
+        removeCardFromHand(player, wine.id);
+        room.discard.push(wine);
+        checkLianying(room, player);
+        player.hp += 1;
+        addLog(room, `${player.name} 使用【酒】自救，体力值: ${player.hp}/${player.maxHp}`);
+        if (player.hp > 0) { rescued = true; break; }
+        i++;
+        continue;
+      }
+      break; // No more peach or wine
     }
-    // Try wine to self-save
-    const wine = player.hand.find(c => c.subtype === 'wine');
-    if (wine) {
-      removeCardFromHand(player, wine.id);
-      room.discard.push(wine);
-      checkLianying(room, player);
-      player.hp = 1;
-      addLog(room, `${player.name} 使用【酒】自救，回复至1点体力`);
-      return false;
-    }
+
     // 华佗 急救: out of turn, red cards as peach to save dying player
-    const huatuo = room.players.find(p => p.alive && p.hero === 'huatuo' && p.id !== player.id);
-    if (huatuo && player.hp <= 0) {
-      const redCard = huatuo.hand.find(c => isRedCard(c));
-      if (redCard) {
-        removeCardFromHand(huatuo, redCard.id);
-        room.discard.push(redCard);
-        player.hp = 1;
-        addLog(room, `华佗【急救】将红色牌${redCard.name}当【桃】使用，${player.name}回复至1点体力`);
-        checkLianying(room, huatuo);
-        return false;
+    if (!rescued && player.hp <= 0) {
+      const huatuo = room.players.find(p => p.alive && p.hero === 'huatuo' && p.id !== player.id);
+      if (huatuo) {
+        while (player.hp <= 0) {
+          const redCard = huatuo.hand.find(c => isRedCard(c));
+          if (!redCard) break;
+          removeCardFromHand(huatuo, redCard.id);
+          room.discard.push(redCard);
+          checkLianying(room, huatuo);
+          player.hp += 1;
+          addLog(room, `华佗【急救】将红色牌${redCard.name}当【桃】使用，${player.name}体力值: ${player.hp}/${player.maxHp}`);
+        }
+        if (player.hp > 0) rescued = true;
       }
     }
+
     // 孙权 救援 (Lord skill): Wu allies' peach heals 2 HP instead of 1
-    if (player.hero === 'sunquan' && player.role === 'lord') {
+    if (!rescued && player.hp <= 0 && player.hero === 'sunquan' && player.role === 'lord') {
       const wuAllies = room.players.filter(p => p.alive && p.id !== player.id && HEROES[p.hero]?.kingdom === '吴');
       for (const ally of wuAllies) {
         if (player.hp > 0) break;
@@ -398,8 +414,11 @@ function checkDeath(room, player, killer) {
           addLog(room, `${ally.name} 响应【救援】使用【桃】，${player.name} 回复2点体力（至${player.hp}）`);
         }
       }
-      if (player.hp > 0) return false;
+      if (player.hp > 0) rescued = true;
     }
+
+    if (rescued) return false;
+
     player.alive = false;
     addLog(room, `💀 ${player.name} (${ROLE_NAMES[player.role]}) 阵亡！`);
 
@@ -989,7 +1008,7 @@ function handlePlayCard(room, player, data) {
 
     case 'dismantle': {
       if (!target || !target.alive || target.id === player.id) return;
-      if (target.hand.length === 0 && !target.equipment.weapon && !target.equipment.armor && !target.equipment.plusHorse && !target.equipment.minusHorse) {
+      if (target.hand.length === 0 && !target.equipment.weapon && !target.equipment.armor && !target.equipment.plusHorse && !target.equipment.minusHorse && target.judgments.length === 0) {
         io.sockets.sockets.get(player.socketId)?.emit('error', '目标没有可拆的牌');
         return;
       }
@@ -1007,6 +1026,9 @@ function handlePlayCard(room, player, data) {
         if (dismantleTarget.equipment.armor) equipOptions.push({ slot: 'armor', card: dismantleTarget.equipment.armor });
         if (dismantleTarget.equipment.plusHorse) equipOptions.push({ slot: 'plusHorse', card: dismantleTarget.equipment.plusHorse });
         if (dismantleTarget.equipment.minusHorse) equipOptions.push({ slot: 'minusHorse', card: dismantleTarget.equipment.minusHorse });
+        dismantleTarget.judgments.forEach((j, i) => {
+          equipOptions.push({ slot: `judgment_${i}`, card: j, cardName: j.name });
+        });
         const hasHand = dismantleTarget.hand.length > 0;
         if (equipOptions.length === 0 && !hasHand) { broadcastState(room); return; }
         // If only hand cards, random pick directly
@@ -1060,6 +1082,9 @@ function handlePlayCard(room, player, data) {
         if (snatchTarget.equipment.armor) equipOptions.push({ slot: 'armor', card: snatchTarget.equipment.armor });
         if (snatchTarget.equipment.plusHorse) equipOptions.push({ slot: 'plusHorse', card: snatchTarget.equipment.plusHorse });
         if (snatchTarget.equipment.minusHorse) equipOptions.push({ slot: 'minusHorse', card: snatchTarget.equipment.minusHorse });
+        snatchTarget.judgments.forEach((j, i) => {
+          equipOptions.push({ slot: `judgment_${i}`, card: j, cardName: j.name });
+        });
         const hasHand = snatchTarget.hand.length > 0;
         if (equipOptions.length === 0 && !hasHand) { broadcastState(room); return; }
         if (equipOptions.length === 0 && hasHand) {
@@ -1576,6 +1601,19 @@ function handleResponse(room, player, data) {
         room.discard.push(chosen);
         addLog(room, `拆掉了 ${target.name} 的一张手牌`);
         checkLianying(room, target);
+      }
+    } else if (data.chooseSlot && data.chooseSlot.startsWith('judgment_')) {
+      // Judgment area card
+      const jIdx = parseInt(data.chooseSlot.replace('judgment_', ''));
+      if (isNaN(jIdx) || jIdx < 0 || jIdx >= target.judgments.length) return;
+      const card = target.judgments.splice(jIdx, 1)[0];
+      if (!card) return;
+      if (isSnatch) {
+        sourcePlayer.hand.push(card);
+        addLog(room, `${sourcePlayer.name} 获得了 ${target.name} 判定区的${card.name}`);
+      } else {
+        room.discard.push(card);
+        addLog(room, `拆掉了 ${target.name} 判定区的${card.name}`);
       }
     } else if (data.chooseSlot) {
       // Specific equipment slot
@@ -2172,6 +2210,192 @@ io.on('connection', (socket) => {
 
     addLog(currentRoom, `${currentPlayer.name} 结束出牌阶段`);
     endCurrentTurn(currentRoom);
+  });
+
+  // ====== Force Skip — escape any stuck pendingAction ======
+  socket.on('forceSkip', () => {
+    if (!currentRoom || currentRoom.state !== 'playing') return;
+    const pa = currentRoom.pendingAction;
+    if (!pa) return;
+
+    // Verify the requesting player is involved in the current pendingAction
+    const pid = socket.id;
+    const isCurrentTurnPlayer = currentRoom.players[currentRoom.currentPlayerIdx]?.id === pid;
+    const isInvolved = isCurrentTurnPlayer ||
+      pa.source === pid || pa.playerId === pid || pa.targetId === pid ||
+      pa.target === pid || pa.attackerId === pid || pa.daqiaoId === pid ||
+      (pa.askOrder && pa.askOrder[pa.currentAskerIdx] === pid) ||
+      (pa.players && pa.players[pa.currentIdx] === pid);
+
+    if (!isInvolved) return;
+
+    addLog(currentRoom, `${currentPlayer.name} 选择跳过当前操作`);
+
+    // Handle each pendingAction type gracefully
+    switch (pa.type) {
+      case 'nullify_chance': {
+        // Skip all remaining nullify asks, resolve the trick
+        currentRoom.pendingAction = null;
+        if (pa.onResolve) pa.onResolve();
+        broadcastState(currentRoom);
+        break;
+      }
+      case 'dodge': {
+        // Treat as failed dodge — take damage
+        const attacker = currentRoom.players.find(p => p.id === pa.attacker);
+        const target = currentRoom.players.find(p => p.id === pa.target);
+        if (target && attacker) {
+          applyAttackDamage(currentRoom, attacker, target, pa.card, pa.dodgesNeeded);
+        } else {
+          currentRoom.pendingAction = null;
+          broadcastState(currentRoom);
+        }
+        break;
+      }
+      case 'duel': {
+        // Current player loses the duel
+        const loser = currentRoom.players.find(p => p.id === pa.players[pa.currentIdx]);
+        const winner = currentRoom.players.find(p => p.id === pa.players[1 - pa.currentIdx]);
+        if (loser && winner) {
+          let damage = 1;
+          if (currentRoom.luoyiActive && winner.id === currentRoom.players[currentRoom.currentPlayerIdx]?.id) damage++;
+          loser.hp -= damage;
+          addLog(currentRoom, `${loser.name} 在决斗中受到${damage}点伤害，体力值: ${loser.hp}/${loser.maxHp}`);
+          currentRoom.pendingAction = null;
+          checkDeath(currentRoom, loser, winner);
+        } else {
+          currentRoom.pendingAction = null;
+        }
+        broadcastState(currentRoom);
+        break;
+      }
+      case 'choose_dismantle':
+      case 'choose_snatch': {
+        // Cancel the dismantle/snatch — just skip it
+        currentRoom.pendingAction = null;
+        broadcastState(currentRoom);
+        break;
+      }
+      case 'fanjian_guess': {
+        // Auto-pick wrong guess — take 1 damage
+        const source = currentRoom.players.find(p => p.id === pa.source);
+        const target = currentRoom.players.find(p => p.id === pa.targetId);
+        if (source && target) {
+          const card = source.hand.find(c => c.id === pa.cardId);
+          if (card) {
+            removeCardFromHand(source, card.id);
+            checkLianying(currentRoom, source);
+            target.hand.push(card);
+            addLog(currentRoom, `${target.name} 跳过猜测，获得牌${card.name}，受到1点伤害`);
+            target.hp -= 1;
+            currentRoom.pendingAction = null;
+            checkDeath(currentRoom, target, source);
+          } else {
+            currentRoom.pendingAction = null;
+          }
+        } else {
+          currentRoom.pendingAction = null;
+        }
+        broadcastState(currentRoom);
+        break;
+      }
+      case 'liuli_choice': {
+        // Decline liuli
+        currentRoom.pendingAction = null;
+        // Restore the original dodge pending
+        if (pa.originalPa) {
+          currentRoom.pendingAction = pa.originalPa;
+        }
+        broadcastState(currentRoom);
+        break;
+      }
+      case 'liuli_select': {
+        // Cancel liuli selection — restore dodge
+        currentRoom.pendingAction = null;
+        if (pa.originalPa) {
+          currentRoom.pendingAction = pa.originalPa;
+        }
+        broadcastState(currentRoom);
+        break;
+      }
+      case 'luoyi_choice': {
+        // Decline luoyi
+        const luoyiPlayer = currentRoom.players.find(p => p.id === pa.playerId);
+        currentRoom.pendingAction = null;
+        if (luoyiPlayer) {
+          const drawn = drawCards(currentRoom, luoyiPlayer, pa.drawCount);
+          addLog(currentRoom, `${luoyiPlayer.name} 跳过裸衣，摸了${drawn.length}张牌`);
+        }
+        if (pa.skipPlayPhase) {
+          currentRoom.turnPhase = 'discard';
+          endCurrentTurn(currentRoom);
+        }
+        broadcastState(currentRoom);
+        break;
+      }
+      case 'guanshifu_choice':
+      case 'guanshifu_select': {
+        // Decline guanshifu
+        currentRoom.pendingAction = null;
+        broadcastState(currentRoom);
+        break;
+      }
+      case 'discard': {
+        // Force discard: auto-discard from the end of hand
+        const discardPlayer = currentRoom.players.find(p => p.id === pa.playerId);
+        if (discardPlayer) {
+          const count = pa.count;
+          for (let i = 0; i < count && discardPlayer.hand.length > 0; i++) {
+            const card = discardPlayer.hand.pop();
+            currentRoom.discard.push(card);
+            addLog(currentRoom, `${discardPlayer.name} 自动弃置了${card.name}`);
+          }
+          checkLianying(currentRoom, discardPlayer);
+        }
+        currentRoom.pendingAction = null;
+        addLog(currentRoom, `${currentRoom.players[currentRoom.currentPlayerIdx]?.name || '?'} 的回合结束`);
+        nextTurn(currentRoom);
+        break;
+      }
+      case 'barbarian':
+      case 'arrow': {
+        // Skip AOE response — take damage
+        const aoeTarget = currentRoom.players.find(p => p.id === pa.targets?.[pa.currentIdx]);
+        const aoeSource = currentRoom.players.find(p => p.id === pa.source);
+        if (aoeTarget && aoeSource) {
+          aoeTarget.hp -= 1;
+          addLog(currentRoom, `${aoeTarget.name} 跳过响应，受到1点伤害，体力值: ${aoeTarget.hp}/${aoeTarget.maxHp}`);
+          triggerPostDamageSkills(currentRoom, aoeTarget, aoeSource, pa.card);
+          currentRoom.pendingAction = null;
+          checkDeath(currentRoom, aoeTarget, aoeSource);
+          // Advance to next AOE target
+          advanceAoeTarget(currentRoom, pa.type, pa.source, pa.targets, pa.currentIdx + 1, pa.card);
+        } else {
+          currentRoom.pendingAction = null;
+          broadcastState(currentRoom);
+        }
+        break;
+      }
+      default: {
+        // Handle jijiang, hujia, and any other types — just clear and continue
+        if (pa.type === 'jijiang') {
+          // No one responded to jijiang — lord's attack fails
+          addLog(currentRoom, `激将无人响应`);
+          currentRoom.pendingAction = null;
+          broadcastState(currentRoom);
+        } else if (pa.type === 'hujia') {
+          // No one responded to hujia — restore original dodge pending
+          addLog(currentRoom, `护驾无人响应`);
+          currentRoom.pendingAction = pa.originalDodge || null;
+          broadcastState(currentRoom);
+        } else {
+          // Generic fallback — just clear the pendingAction
+          currentRoom.pendingAction = null;
+          broadcastState(currentRoom);
+        }
+        break;
+      }
+    }
   });
 
   socket.on('discardCards', ({ cardIds }) => {

@@ -342,6 +342,7 @@ $('#btnJoin').onclick = () => {
 };
 $('#btnStart').onclick = () => socket.emit('startGame');
 $('#btnEndTurn').onclick = () => { socket.emit('endTurn'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; fanjianTargeting = false; qixiMode = false; qixiCardId = null; };
+$('#btnForceSkip').onclick = () => { socket.emit('forceSkip'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; fanjianTargeting = false; qixiMode = false; qixiCardId = null; };
 $('#btnRespond').onclick = () => { socket.emit('playCard', {}); selectedCardId = null; };
 $('#btnBackLobby').onclick = () => {
   state = null;
@@ -806,6 +807,21 @@ function renderGame() {
 
   // ---- Action buttons ----
   $('#btnEndTurn').style.display = (isMyTurn && !pa) ? '' : 'none';
+  // Show "跳过" button when there's a pendingAction and this player is involved
+  const canForceSkip = pa && (
+    isMyTurn ||
+    myPendingResponse ||
+    (pa.source === state.myId) ||
+    (pa.playerId === state.myId) ||
+    (pa.target === state.myId) ||
+    (pa.attackerId === state.myId) ||
+    (pa.daqiaoId === state.myId) ||
+    (pa.targets && pa.targets[pa.currentIdx] === state.myId) ||
+    (pa.kingdomPlayers && pa.kingdomPlayers[pa.currentAskerIdx] === state.myId) ||
+    (pa.askOrder && pa.askOrder[pa.currentAskerIdx] === state.myId) ||
+    (pa.players && pa.players[pa.currentIdx] === state.myId)
+  );
+  $('#btnForceSkip').style.display = canForceSkip ? '' : 'none';
   const isChooseAction = pa && (pa.type === 'choose_dismantle' || pa.type === 'choose_snatch') && pa.source === state.myId;
   const isFanjianGuess = pa && pa.type === 'fanjian_guess' && pa.targetId === state.myId;
   $('#btnRespond').style.display = (myPendingResponse && !isChooseAction && !isFanjianGuess) ? '' : 'none';
@@ -816,7 +832,12 @@ function renderGame() {
     const trickName = pa.type === 'choose_dismantle' ? '过河拆桥' : '顺手牵羊';
     let btns = '';
     pa.equipOptions.forEach(eq => {
-      const slotLabel = eq.slot === 'weapon' ? '⚔武器' : eq.slot === 'armor' ? '🛡防具' : eq.slot === 'plusHorse' ? '🐎+1马' : '🐎-1马';
+      let slotLabel;
+      if (eq.slot.startsWith('judgment_')) {
+        slotLabel = '📜判定区';
+      } else {
+        slotLabel = eq.slot === 'weapon' ? '⚔武器' : eq.slot === 'armor' ? '🛡防具' : eq.slot === 'plusHorse' ? '🐎+1马' : '🐎-1马';
+      }
       btns += `<button class="btn btn-choose-card" data-slot="${eq.slot}">${slotLabel} ${eq.cardName}</button>`;
     });
     if (pa.hasHand) {
