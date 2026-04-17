@@ -375,6 +375,25 @@ input[type="text"]::placeholder { color: #c0b8a8; }
 .role-rebel { background: linear-gradient(135deg, #d4912a, #b87620); color: #fff; box-shadow: 0 2px 8px rgba(212,145,42,0.2); }
 .role-spy { background: linear-gradient(135deg, #2980b9, #2471a3); color: #fff; box-shadow: 0 2px 8px rgba(41,128,185,0.2); }
 
+.lord-reveal {
+  font-size: 16px;
+  margin-bottom: 20px;
+  padding: 10px 20px;
+  background: linear-gradient(135deg, rgba(192,57,43,0.12), rgba(231,76,60,0.08));
+  border: 1px solid rgba(192,57,43,0.3);
+  border-radius: 8px;
+  color: var(--ink);
+  text-align: center;
+}
+.lord-reveal .lord-icon {
+  font-size: 20px;
+  margin-right: 4px;
+}
+.lord-reveal strong {
+  color: #c0392b;
+  font-size: 18px;
+}
+
 .hero-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);

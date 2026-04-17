@@ -7,6 +7,8 @@ let selectingTarget = false;
 let selectTargetFor = null;
 let lordSkillTargeting = false; // true when selecting target for 激将
 let fanjianTargeting = false; // true when selecting target for 反间
+let qixiMode = false; // true when in 奇袭 card+target selection mode
+let qixiCardId = null; // selected black card for 奇袭
 let discardSelection = new Set(); // cards selected for discard phase
 let zhihengHandSelection = new Set(); // hand cards selected for zhiheng
 let zhihengEquipSelection = new Set(); // equipment slots selected for zhiheng
@@ -339,7 +341,7 @@ $('#btnJoin').onclick = () => {
   socket.emit('joinRoom', { roomId: code, playerName: name });
 };
 $('#btnStart').onclick = () => socket.emit('startGame');
-$('#btnEndTurn').onclick = () => { socket.emit('endTurn'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; fanjianTargeting = false; };
+$('#btnEndTurn').onclick = () => { socket.emit('endTurn'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; fanjianTargeting = false; qixiMode = false; qixiCardId = null; };
 $('#btnRespond').onclick = () => { socket.emit('playCard', {}); selectedCardId = null; };
 $('#btnBackLobby').onclick = () => {
   state = null;
@@ -353,6 +355,8 @@ $('#btnBackLobby').onclick = () => {
   selectTargetFor = null;
   lordSkillTargeting = false;
   fanjianTargeting = false;
+  qixiMode = false;
+  qixiCardId = null;
   showScreen('lobby');
 };
 $('#btnSkill').onclick = () => {
@@ -385,6 +389,14 @@ $('#btnFanjian').onclick = () => {
   selectingTarget = true;
   selectTargetFor = null;
   selectedCardId = null;
+  renderGame();
+};
+$('#btnQixi').onclick = () => {
+  if (!state) return;
+  qixiMode = true;
+  qixiCardId = null;
+  selectedCardId = null;
+  selectingTarget = false;
   renderGame();
 };
 $('#btnConfirmDiscard').onclick = () => {
@@ -500,6 +512,18 @@ function renderHeroSelect() {
   const roleSpan = $('#myRole');
   roleSpan.textContent = ROLE_NAMES[me.role] || '???';
   roleSpan.className = ROLE_CLASS[me.role] || '';
+
+  // Show lord identity to all players
+  const lordRevealEl = document.getElementById('lordReveal');
+  const lordPlayer = state.players.find(p => p.role === 'lord');
+  if (lordPlayer) {
+    const lordHeroName = lordPlayer.hero ? HERO_NAMES[lordPlayer.hero] : '选择中...';
+    const isMe = lordPlayer.id === state.myId;
+    lordRevealEl.innerHTML = `<span class="lord-icon">👑</span> 本局主公: <strong>${lordPlayer.name}</strong>${isMe ? ' (你)' : ''}${lordPlayer.hero ? ` — ${lordHeroName}` : ''}`;
+    lordRevealEl.style.display = '';
+  } else {
+    lordRevealEl.style.display = 'none';
+  }
 
   const allHeroes = [
     { key:'liubei', name:'刘备', kingdom:'蜀', hp:4, skill:'仁德/激将', desc:'出牌阶段可将手牌交给其他角色；主公技：令蜀国武将代出杀' },
@@ -658,12 +682,20 @@ function renderGame() {
       }
     } else if (pa.type === 'guanshifu_select') {
       // Handled separately below, not a simple response
+    } else if (pa.type === 'liuli_choice') {
+      if (pa.daqiaoId === state.myId) {
+        myPendingResponse = true;
+        responseHint = '是否发动【流离】？弃一张牌将此杀转移给攻击范围内的其他角色';
+      }
+    } else if (pa.type === 'liuli_select') {
+      // Handled separately below
     }
   }
 
   // Detect zhiheng selection phase
   const isZhihengSelect = pa?.type === 'zhiheng_select' && pa.playerId === state.myId;
   const isGsfSelect = pa?.type === 'guanshifu_select' && pa.attackerId === state.myId;
+  const isLiuliSelect = pa?.type === 'liuli_select' && pa.daqiaoId === state.myId;
 
   // Detect discard phase for me
   const isDiscardPhase = pa?.type === 'discard' && pa.playerId === state.myId;
@@ -719,6 +751,11 @@ function renderGame() {
         // 反间 target selection
         socket.emit('skillAction', { skillType: 'fanjian', targetId });
         fanjianTargeting = false;
+      } else if (qixiMode && qixiCardId) {
+        // 奇袭 target selection
+        socket.emit('skillAction', { skillType: 'qixi', cardId: qixiCardId, targetId });
+        qixiMode = false;
+        qixiCardId = null;
       } else {
         socket.emit('playCard', { cardId: selectTargetFor, targetId });
       }
@@ -748,12 +785,18 @@ function renderGame() {
   } else if (isGsfSelect) {
     const total = gsfHandSelection.size + gsfEquipSelection.size;
     hintEl.textContent = `【贯石斧】请选择弃置2张牌（已选 ${total}/2），不能弃贯石斧本身`;
+  } else if (isLiuliSelect) {
+    hintEl.textContent = selectedCardId ? '【流离】请选择转移目标角色' : '【流离】请选择弃置的手牌，然后选择转移目标';
   } else if (myPendingResponse) {
     hintEl.textContent = responseHint;
   } else if (lordSkillTargeting && selectingTarget) {
     hintEl.textContent = '【激将】请选择一个攻击目标';
   } else if (fanjianTargeting && selectingTarget) {
     hintEl.textContent = '【反间】请选择一个目标角色';
+  } else if (qixiMode && !qixiCardId) {
+    hintEl.textContent = '【奇袭】请选择一张黑色手牌（♠♣）';
+  } else if (qixiMode && qixiCardId && selectingTarget) {
+    hintEl.textContent = '【奇袭】请选择一个目标角色';
   } else if (isMyTurn && !pa) {
     hintEl.textContent = selectingTarget ? '请选择一个目标' : '你的回合 — 请出牌或结束回合';
   } else {
@@ -850,6 +893,35 @@ function renderGame() {
       };
     });
     $('#btnRespond').style.display = 'none';
+  } else if (pa?.type === 'liuli_choice' && pa.daqiaoId === state.myId) {
+    chooseArea.innerHTML = `<button class="btn btn-gold" id="btnLiuliYes">发动流离</button><button class="btn btn-danger" id="btnLiuliNo">放弃</button>`;
+    chooseArea.style.display = 'flex';
+    document.getElementById('btnLiuliYes').onclick = () => {
+      socket.emit('playCard', { activate: true });
+    };
+    document.getElementById('btnLiuliNo').onclick = () => {
+      socket.emit('playCard', { activate: false });
+    };
+    $('#btnRespond').style.display = 'none';
+  } else if (isLiuliSelect) {
+    // Show candidate target buttons for 流离
+    let targetBtns = '<span style="font-size:12px;color:var(--wood);margin-right:4px;">转移目标:</span>';
+    pa.candidates.forEach(c => {
+      targetBtns += `<button class="btn btn-choose-card" data-liulitarget="${c.id}">${c.name}</button>`;
+    });
+    chooseArea.innerHTML = targetBtns;
+    chooseArea.style.display = 'flex';
+    chooseArea.querySelectorAll('[data-liulitarget]').forEach(btn => {
+      btn.onclick = () => {
+        if (!selectedCardId) {
+          alert('请先选择一张手牌弃置');
+          return;
+        }
+        socket.emit('playCard', { liuliCardId: selectedCardId, liuliTargetId: btn.dataset.liulitarget });
+        selectedCardId = null;
+      };
+    });
+    $('#btnRespond').style.display = 'none';
   } else {
     chooseArea.style.display = 'none';
     chooseArea.innerHTML = '';
@@ -932,6 +1004,10 @@ function renderGame() {
   // 反间: Zhou Yu, during play phase, no pending action, has hand cards
   const showFanjian = me.hero === 'zhouyu' && isMyTurn && !pa && me.hand.length > 0;
   $('#btnFanjian').style.display = showFanjian ? '' : 'none';
+  // 奇袭: Gan Ning, during play phase, no pending action, has black hand cards
+  const hasBlackCard = me.hand.some(c => c.suit === '♠' || c.suit === '♣');
+  const showQixi = me.hero === 'ganning' && isMyTurn && !pa && hasBlackCard;
+  $('#btnQixi').style.display = showQixi ? '' : 'none';
 
   // ---- Render my info ----
   let myHpPips = '';
@@ -1015,6 +1091,13 @@ function renderGame() {
         return;
       }
 
+      // Liuli select: pick a hand card to discard
+      if (isLiuliSelect) {
+        selectedCardId = (selectedCardId === cardId) ? null : cardId;
+        renderGame();
+        return;
+      }
+
       // If responding to pending action
       if (myPendingResponse) {
         socket.emit('playCard', { responseCardId: cardId });
@@ -1024,6 +1107,20 @@ function renderGame() {
 
       if (!isMyTurn || pa) return;
 
+      // 奇袭 mode: select a black card
+      if (qixiMode) {
+        const card = me.hand.find(h => h.id === cardId);
+        if (!card || (card.suit !== '♠' && card.suit !== '♣')) {
+          showToast('奇袭只能使用黑色牌');
+          return;
+        }
+        qixiCardId = cardId;
+        selectedCardId = cardId;
+        selectingTarget = true;
+        renderGame();
+        return;
+      }
+
       // If already selecting target, clicking card deselects
       if (selectingTarget) {
         selectedCardId = null;
@@ -1031,6 +1128,8 @@ function renderGame() {
         selectTargetFor = null;
         lordSkillTargeting = false;
         fanjianTargeting = false;
+        qixiMode = false;
+        qixiCardId = null;
         renderGame();
         return;
       }
