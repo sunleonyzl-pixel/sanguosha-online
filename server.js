@@ -643,11 +643,17 @@ function finishJudgmentPhase(room, player, skipPlayPhase, skipDrawPhase) {
     if (player.hero === 'zhugeliang') drawCount = 2; // Simplified
     // 周瑜 英姿: draw 3 instead of 2
     if (player.hero === 'zhouyu') drawCount = 3;
-    // 许褚 裸衣: draw 1 less, damage +1 this turn (auto-activates; TODO: make optional with UI)
+    // 许褚 裸衣: ask player if they want to activate (optional)
     if (player.hero === 'xuchu') {
-      room.luoyiActive = true;
-      drawCount -= 1;
-      addLog(room, `许褚【裸衣】发动，少摸一张牌，本回合杀和决斗伤害+1`);
+      room.pendingAction = {
+        type: 'luoyi_choice',
+        playerId: player.id,
+        drawCount,
+        skipPlayPhase,
+      };
+      addLog(room, `${player.name} 是否发动【裸衣】？（少摸一张牌，本回合杀和决斗伤害+1）`);
+      broadcastState(room);
+      return;
     }
     const drawn = drawCards(room, player, drawCount);
     addLog(room, `${player.name} 摸了${drawn.length}张牌`);
@@ -1257,13 +1263,25 @@ function handleResponse(room, player, data) {
       }
       removeCardFromHand(player, nullifyCard.id);
       room.discard.push(nullifyCard);
+      checkLianying(room, player);
       addLog(room, `${player.name} 使用了【无懈可击】，抵消了【${pa.trickName}】`);
       emitSound(room, '无懈可击');
       // 黄月英 集智
       if (player.hero === 'huangyueying') { drawCards(room, player, 1); addLog(room, `黄月英【集智】发动，摸一张牌`); }
+
+      // Save current pa callbacks before overwriting pendingAction
+      const savedOnResolve = pa.onResolve;
+      const savedOnNullify = pa.onNullify;
       room.pendingAction = null;
-      if (pa.onNullify) pa.onNullify();
-      broadcastState(room);
+
+      // Chain: give others a chance to counter this 无懈可击 with their own
+      startNullifyChance(room, '无懈可击', player.id, null, () => {
+        // No one countered — the 无懈可击 takes effect (nullify succeeds)
+        if (savedOnNullify) savedOnNullify();
+      }, () => {
+        // Someone countered the 无懈可击 — original trick resolves as normal
+        savedOnResolve();
+      });
     } else {
       // Pass - move to next player
       pa.currentAskerIdx++;
@@ -1277,6 +1295,33 @@ function handleResponse(room, player, data) {
         broadcastState(room);
       }
     }
+    return;
+  }
+
+  // ====== 裸衣 (Luoyi) — Xu Chu chooses to activate ======
+  if (pa.type === 'luoyi_choice') {
+    if (player.id !== pa.playerId) return;
+    const drawCount = pa.drawCount;
+    const skipPlayPhase = pa.skipPlayPhase;
+    room.pendingAction = null;
+    if (data.activate) {
+      room.luoyiActive = true;
+      const drawn = drawCards(room, player, drawCount - 1);
+      addLog(room, `许褚【裸衣】发动，少摸一张牌，本回合杀和决斗伤害+1`);
+      emitSound(room, '裸衣');
+      addLog(room, `${player.name} 摸了${drawn.length}张牌`);
+    } else {
+      const drawn = drawCards(room, player, drawCount);
+      addLog(room, `${player.name} 放弃发动裸衣，摸了${drawn.length}张牌`);
+    }
+    if (skipPlayPhase) {
+      room.turnPhase = 'discard';
+      addLog(room, `${player.name} 被【乐不思蜀】跳过出牌阶段`);
+      endCurrentTurn(room);
+      return;
+    }
+    room.turnPhase = 'play';
+    broadcastState(room);
     return;
   }
 

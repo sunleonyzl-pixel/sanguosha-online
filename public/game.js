@@ -646,6 +646,11 @@ function renderGame() {
         const targetPlayer = state.players.find(p => p.id === pa.targetId);
         responseHint = `青龙偃月刀：是否对 ${targetPlayer?.name||''} 再出一张【杀】？选择手中的杀或点击"不出"放弃`;
       }
+    } else if (pa.type === 'luoyi_choice') {
+      if (pa.playerId === state.myId) {
+        myPendingResponse = true;
+        responseHint = '是否发动【裸衣】？少摸一张牌，本回合杀和决斗伤害+1';
+      }
     } else if (pa.type === 'guanshifu_choice') {
       if (pa.attackerId === state.myId) {
         myPendingResponse = true;
@@ -797,6 +802,16 @@ function renderGame() {
         socket.emit('playCard', { guessSuit: btn.dataset.suit });
       };
     });
+  } else if (pa?.type === 'luoyi_choice' && pa.playerId === state.myId) {
+    chooseArea.innerHTML = `<button class="btn btn-gold" id="btnLuoyiYes">发动裸衣</button><button class="btn btn-danger" id="btnLuoyiNo">放弃</button>`;
+    chooseArea.style.display = 'flex';
+    document.getElementById('btnLuoyiYes').onclick = () => {
+      socket.emit('playCard', { activate: true });
+    };
+    document.getElementById('btnLuoyiNo').onclick = () => {
+      socket.emit('playCard', { activate: false });
+    };
+    $('#btnRespond').style.display = 'none';
   } else if (pa?.type === 'guanshifu_choice' && pa.attackerId === state.myId) {
     // Show "发动" and "放弃" buttons
     chooseArea.innerHTML = `<button class="btn btn-gold" id="btnGsfActivate">发动贯石斧</button><button class="btn btn-danger" id="btnGsfPass">放弃</button>`;
