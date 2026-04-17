@@ -6,7 +6,161 @@ let selectedCardId = null;
 let selectingTarget = false;
 let selectTargetFor = null;
 let lordSkillTargeting = false; // true when selecting target for 激将
+let fanjianTargeting = false; // true when selecting target for 反间
 let discardSelection = new Set(); // cards selected for discard phase
+
+// ====== BACKGROUND MUSIC (Web Audio API - Chinese pentatonic ambient) ======
+const BGM = (() => {
+  let ctx = null, masterGain = null, playing = false, muted = false;
+  let intervalId = null;
+
+  // Chinese pentatonic: C D E G A (gong shang jue zhi yu)
+  const BASE_NOTES = [261.63, 293.66, 329.63, 392.00, 440.00]; // C4 octave
+  const OCTAVES = [0.5, 1, 2]; // lower, mid, upper
+
+  function init() {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = ctx.createGain();
+    masterGain.gain.value = 0.12;
+    masterGain.connect(ctx.destination);
+  }
+
+  function playNote(freq, startTime, duration, type, vol) {
+    const osc = ctx.createOscillator();
+    const env = ctx.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.value = freq;
+    env.gain.setValueAtTime(0, startTime);
+    env.gain.linearRampToValueAtTime(vol || 0.3, startTime + 0.08);
+    env.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+    osc.connect(env);
+    env.connect(masterGain);
+    osc.start(startTime);
+    osc.stop(startTime + duration + 0.05);
+  }
+
+  function playPhrase() {
+    if (!ctx || !playing) return;
+    const now = ctx.currentTime;
+    // Pick 3-5 random pentatonic notes with gentle timing
+    const noteCount = 3 + Math.floor(Math.random() * 3);
+    const octave = OCTAVES[Math.floor(Math.random() * OCTAVES.length)];
+    for (let i = 0; i < noteCount; i++) {
+      const note = BASE_NOTES[Math.floor(Math.random() * BASE_NOTES.length)];
+      const freq = note * octave;
+      const delay = i * (0.4 + Math.random() * 0.6);
+      const dur = 1.2 + Math.random() * 2.0;
+      playNote(freq, now + delay, dur, 'sine', 0.15 + Math.random() * 0.15);
+      // Occasional triangle harmony
+      if (Math.random() < 0.3) {
+        const harm = BASE_NOTES[Math.floor(Math.random() * BASE_NOTES.length)] * (Math.random() < 0.5 ? 1 : 0.5);
+        playNote(harm, now + delay + 0.1, dur * 0.8, 'triangle', 0.08);
+      }
+    }
+  }
+
+  // Gentle ambient pad (sustained chord)
+  function playPad() {
+    if (!ctx || !playing) return;
+    const now = ctx.currentTime;
+    const root = BASE_NOTES[Math.floor(Math.random() * 3)]; // C, D, or E
+    const fifth = BASE_NOTES[(BASE_NOTES.indexOf(root) + 3) % 5];
+    [root * 0.5, fifth * 0.5].forEach(f => {
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      env.gain.setValueAtTime(0, now);
+      env.gain.linearRampToValueAtTime(0.04, now + 1.5);
+      env.gain.setValueAtTime(0.04, now + 4);
+      env.gain.exponentialRampToValueAtTime(0.001, now + 7);
+      osc.connect(env);
+      env.connect(masterGain);
+      osc.start(now);
+      osc.stop(now + 7.5);
+    });
+  }
+
+  return {
+    start() {
+      if (playing) return;
+      if (!ctx) init();
+      if (ctx.state === 'suspended') ctx.resume();
+      playing = true;
+      muted = false;
+      playPhrase();
+      playPad();
+      intervalId = setInterval(() => {
+        if (playing && !muted) {
+          playPhrase();
+          if (Math.random() < 0.4) playPad();
+        }
+      }, 3500 + Math.random() * 2000);
+    },
+    stop() {
+      playing = false;
+      muted = true;
+      if (intervalId) { clearInterval(intervalId); intervalId = null; }
+    },
+    toggle() {
+      if (muted || !playing) { this.start(); return true; }
+      else { this.stop(); return false; }
+    }
+  };
+})();
+
+// Music toggle button
+document.getElementById('musicToggle').addEventListener('click', () => {
+  const on = BGM.toggle();
+  const btn = document.getElementById('musicToggle');
+  btn.textContent = on ? '♫' : '♪';
+  btn.classList.toggle('muted', !on);
+});
+// Auto-start music on first user interaction
+document.addEventListener('click', function startMusic() {
+  BGM.start();
+  document.removeEventListener('click', startMusic);
+}, { once: true });
+
+// ====== CARD VOICE ANNOUNCEMENTS (SpeechSynthesis) ======
+const CardVoice = (() => {
+  let zhVoice = null;
+  let ready = false;
+
+  function findVoice() {
+    const voices = speechSynthesis.getVoices();
+    zhVoice = voices.find(v => v.lang.startsWith('zh')) || null;
+    ready = true;
+  }
+
+  if (typeof speechSynthesis !== 'undefined') {
+    speechSynthesis.onvoiceschanged = findVoice;
+    findVoice();
+  }
+
+  return {
+    speak(text) {
+      if (typeof speechSynthesis === 'undefined') return;
+      if (!ready) findVoice();
+      // Cancel any ongoing speech to avoid queue buildup
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'zh-CN';
+      u.rate = 1.1;
+      u.pitch = 1.0;
+      u.volume = 0.8;
+      if (zhVoice) u.voice = zhVoice;
+      speechSynthesis.speak(u);
+    }
+  };
+})();
+
+// Listen for card sound events from server
+socket.on('cardSound', (text) => {
+  CardVoice.speak(text);
+});
+
+
 
 // ====== HERO DATA (client side) ======
 const HERO_PORTRAITS = {
@@ -30,7 +184,7 @@ const HERO_NAMES = {
 const ROLE_NAMES = { lord:'主公', loyalist:'忠臣', rebel:'反贼', spy:'内奸' };
 const ROLE_CLASS = { lord:'role-lord', loyalist:'role-loyalist', rebel:'role-rebel', spy:'role-spy' };
 
-const NEEDS_TARGET = ['attack','duel','dismantle','snatch','indulgence'];
+const NEEDS_TARGET = ['attack','duel','dismantle','snatch','indulgence','famine'];
 
 // ====== DOM REFS ======
 const $  = s => document.querySelector(s);
@@ -55,20 +209,35 @@ function showToast(msg) {
 }
 
 // ====== LOBBY ======
+// Restore saved player name
+const savedName = localStorage.getItem('sgz_playerName');
+if (savedName) $('#playerName').value = savedName;
+
 $('#btnCreate').onclick = () => {
   const name = $('#playerName').value.trim() || '无名侠';
+  localStorage.setItem('sgz_playerName', name);
   socket.emit('createRoom', { playerName: name });
 };
 $('#btnJoin').onclick = () => {
   const name = $('#playerName').value.trim() || '无名侠';
+  localStorage.setItem('sgz_playerName', name);
   const code = $('#roomCode').value.trim().toUpperCase();
   if (!code) { showToast('请输入房间号'); return; }
   socket.emit('joinRoom', { roomId: code, playerName: name });
 };
 $('#btnStart').onclick = () => socket.emit('startGame');
-$('#btnEndTurn').onclick = () => { socket.emit('endTurn'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; };
+$('#btnEndTurn').onclick = () => { socket.emit('endTurn'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; fanjianTargeting = false; };
 $('#btnRespond').onclick = () => { socket.emit('playCard', {}); selectedCardId = null; };
-$('#btnBackLobby').onclick = () => { location.reload(); };
+$('#btnBackLobby').onclick = () => {
+  state = null;
+  discardSelection.clear();
+  selectedCardId = null;
+  selectingTarget = false;
+  selectTargetFor = null;
+  lordSkillTargeting = false;
+  fanjianTargeting = false;
+  showScreen('lobby');
+};
 $('#btnSkill').onclick = () => {
   if (!state) return;
   const me = state.players.find(p => p.id === state.myId);
@@ -77,6 +246,8 @@ $('#btnSkill').onclick = () => {
   if (me.hero === 'sunquan') socket.emit('skillAction', { skillType: 'zhiheng' });
   if (me.hero === 'huanggai') socket.emit('skillAction', { skillType: 'kurou' });
   if (me.hero === 'huatuo') socket.emit('skillAction', { skillType: 'qingnang' });
+  if (me.hero === 'diaochan') socket.emit('skillAction', { skillType: 'lijian' });
+  if (me.hero === 'sunshangxiang') socket.emit('skillAction', { skillType: 'jieyin' });
 };
 $('#btnJijiang').onclick = () => {
   if (!state) return;
@@ -90,6 +261,14 @@ $('#btnJijiang').onclick = () => {
 $('#btnHujia').onclick = () => {
   if (!state) return;
   socket.emit('lordSkill', { type: 'hujia' });
+};
+$('#btnFanjian').onclick = () => {
+  if (!state) return;
+  fanjianTargeting = true;
+  selectingTarget = true;
+  selectTargetFor = null;
+  selectedCardId = null;
+  renderGame();
 };
 $('#btnConfirmDiscard').onclick = () => {
   if (!state) return;
@@ -146,13 +325,20 @@ function render() {
 
 function renderWaiting() {
   const count = state.players.length;
+  const isHost = state.myId === state.hostId;
   $('.waiting-hint').textContent = `当前 ${count}/8 人 — ${count >= 2 ? '可以开始游戏，也可以继续等待更多玩家' : '至少需要 2 名玩家才能开始'}`;
-  $('#btnStart').disabled = count < 2;
-  $('#btnStart').textContent = count >= 2 ? `开始游戏 (${count}人)` : '等待玩家加入...';
+
+  if (isHost) {
+    $('#btnStart').style.display = '';
+    $('#btnStart').disabled = count < 2;
+    $('#btnStart').textContent = count >= 2 ? `开始游戏 (${count}人)` : '等待玩家加入...';
+  } else {
+    $('#btnStart').style.display = 'none';
+  }
 
   const list = $('#playerList');
   list.innerHTML = state.players.map((p, i) =>
-    `<div class="player-entry">${i === 0 ? '👑 房主 · ' : ''}${p.name}${p.id === state.myId ? ' (你)' : ''}</div>`
+    `<div class="player-entry">${p.id === state.hostId ? '👑 房主 · ' : ''}${p.name}${p.id === state.myId ? ' (你)' : ''}</div>`
   ).join('');
 }
 
@@ -162,7 +348,7 @@ function renderHeroSelect() {
   roleSpan.textContent = ROLE_NAMES[me.role] || '???';
   roleSpan.className = ROLE_CLASS[me.role] || '';
 
-  const heroes = [
+  const allHeroes = [
     { key:'liubei', name:'刘备', kingdom:'蜀', hp:4, skill:'仁德/激将', desc:'出牌阶段可将手牌交给其他角色；主公技：令蜀国武将代出杀' },
     { key:'guanyu', name:'关羽', kingdom:'蜀', hp:4, skill:'武圣', desc:'可将红色牌当【杀】使用' },
     { key:'zhangfei', name:'张飞', kingdom:'蜀', hp:4, skill:'咆哮', desc:'出牌阶段使用【杀】无次数限制' },
@@ -191,12 +377,27 @@ function renderHeroSelect() {
     { key:'huaxiong', name:'华雄', kingdom:'群', hp:6, skill:'耀武', desc:'6血武将；红杀伤害时来源回血或摸牌' },
   ];
 
-  const taken = state.players.filter(p => p.hero).map(p => p.hero);
   const grid = $('#heroGrid');
+
+  // If I already chose, show waiting
+  if (me.hero) {
+    grid.innerHTML = '<div class="hero-select-wait">你已选择武将，等待其他玩家...</div>';
+    return;
+  }
+
+  // If I have hero choices from server, only show those
+  const myChoices = state.heroChoices;
+  if (!myChoices) {
+    // Lord is still picking, show waiting
+    const phase = state.heroSelectPhase;
+    grid.innerHTML = '<div class="hero-select-wait">等待主公选择武将...</div>';
+    return;
+  }
+
+  const heroes = allHeroes.filter(h => myChoices.includes(h.key));
+
   grid.innerHTML = heroes.map(h => {
-    const isTaken = taken.includes(h.key);
-    const isMe = me.hero === h.key;
-    return `<div class="hero-card ${isTaken ? 'taken' : ''}" data-hero="${h.key}">
+    return `<div class="hero-card" data-hero="${h.key}">
       <div class="hero-portrait">${HERO_PORTRAITS[h.key]}</div>
       <div class="hero-name">${h.name}</div>
       <div class="hero-kingdom">${h.kingdom}</div>
@@ -206,7 +407,7 @@ function renderHeroSelect() {
     </div>`;
   }).join('');
 
-  grid.querySelectorAll('.hero-card:not(.taken)').forEach(el => {
+  grid.querySelectorAll('.hero-card').forEach(el => {
     el.onclick = () => {
       if (me.hero) return;
       socket.emit('selectHero', { heroKey: el.dataset.hero });
@@ -226,12 +427,18 @@ function renderGame() {
   if (pa) {
     if (pa.type === 'dodge' && pa.target === state.myId) {
       myPendingResponse = true;
-      responseHint = '请打出【闪】或点击"不出"';
+      const dNeeded = pa.dodgesNeeded || 1;
+      const dGiven = pa.dodgesGiven || 0;
+      const dRemaining = dNeeded - dGiven;
+      responseHint = dRemaining > 1 ? `【无双】请打出【闪】（还需${dRemaining}张）或"不出"` : '请打出【闪】或点击"不出"';
     } else if (pa.type === 'duel') {
       const currentDueler = pa.players[pa.currentIdx];
       if (currentDueler === state.myId) {
         myPendingResponse = true;
-        responseHint = '决斗中，请打出【杀】或点击"不出"';
+        const needed = pa.attacksNeeded || 1;
+        const given = pa.attacksGiven || 0;
+        const remaining = needed - given;
+        responseHint = remaining > 1 ? `决斗【无双】请打出【杀】（还需${remaining}张）或"不出"` : '决斗中，请打出【杀】或点击"不出"';
       }
     } else if (pa.type === 'barbarian') {
       const ct = pa.targets[pa.currentIdx];
@@ -262,6 +469,29 @@ function renderGame() {
       if (currentAsker === state.myId) {
         myPendingResponse = true;
         responseHint = `是否对【${pa.trickName}】使用【无懈可击】？点击无懈可击或"不出"`;
+      }
+    } else if (pa.type === 'choose_dismantle' || pa.type === 'choose_snatch') {
+      if (pa.source === state.myId) {
+        myPendingResponse = true;
+        const trickName = pa.type === 'choose_dismantle' ? '过河拆桥' : '顺手牵羊';
+        const targetPlayer = state.players.find(p => p.id === pa.targetId);
+        responseHint = `【${trickName}】请选择${targetPlayer?.name || ''}的一张牌`;
+      }
+    } else if (pa.type === 'fanjian_guess') {
+      if (pa.targetId === state.myId) {
+        myPendingResponse = true;
+        responseHint = '【反间】请猜测一种花色：♠黑桃 ♥红桃 ♣梅花 ♦方块';
+      }
+    } else if (pa.type === 'guicai') {
+      if (pa.simayiId === state.myId) {
+        myPendingResponse = true;
+        responseHint = `【鬼才】判定牌为 ${pa.judgeResult?.suit||''}${pa.judgeResult?.number||''} — 选择一张手牌替换，或点击"不出"放弃`;
+      }
+    } else if (pa.type === 'qinglong_choice') {
+      if (pa.attackerId === state.myId) {
+        myPendingResponse = true;
+        const targetPlayer = state.players.find(p => p.id === pa.targetId);
+        responseHint = `青龙偃月刀：是否对 ${targetPlayer?.name||''} 再出一张【杀】？选择手中的杀或点击"不出"放弃`;
       }
     }
   }
@@ -316,6 +546,10 @@ function renderGame() {
         // 激将 target selection
         socket.emit('lordSkill', { type: 'jijiang', targetId });
         lordSkillTargeting = false;
+      } else if (fanjianTargeting) {
+        // 反间 target selection
+        socket.emit('skillAction', { skillType: 'fanjian', targetId });
+        fanjianTargeting = false;
       } else {
         socket.emit('playCard', { cardId: selectTargetFor, targetId });
       }
@@ -343,6 +577,8 @@ function renderGame() {
     hintEl.textContent = responseHint;
   } else if (lordSkillTargeting && selectingTarget) {
     hintEl.textContent = '【激将】请选择一个攻击目标';
+  } else if (fanjianTargeting && selectingTarget) {
+    hintEl.textContent = '【反间】请选择一个目标角色';
   } else if (isMyTurn && !pa) {
     hintEl.textContent = selectingTarget ? '请选择一个目标' : '你的回合 — 请出牌或结束回合';
   } else {
@@ -352,7 +588,49 @@ function renderGame() {
 
   // ---- Action buttons ----
   $('#btnEndTurn').style.display = (isMyTurn && !pa) ? '' : 'none';
-  $('#btnRespond').style.display = myPendingResponse ? '' : 'none';
+  const isChooseAction = pa && (pa.type === 'choose_dismantle' || pa.type === 'choose_snatch') && pa.source === state.myId;
+  const isFanjianGuess = pa && pa.type === 'fanjian_guess' && pa.targetId === state.myId;
+  $('#btnRespond').style.display = (myPendingResponse && !isChooseAction && !isFanjianGuess) ? '' : 'none';
+
+  // ---- Choose card area (过河拆桥/顺手牵羊/反间猜花色) ----
+  const chooseArea = $('#chooseCardArea');
+  if (isChooseAction) {
+    const trickName = pa.type === 'choose_dismantle' ? '过河拆桥' : '顺手牵羊';
+    let btns = '';
+    pa.equipOptions.forEach(eq => {
+      const slotLabel = eq.slot === 'weapon' ? '⚔武器' : eq.slot === 'armor' ? '🛡防具' : eq.slot === 'plusHorse' ? '🐎+1马' : '🐎-1马';
+      btns += `<button class="btn btn-choose-card" data-slot="${eq.slot}">${slotLabel} ${eq.cardName}</button>`;
+    });
+    if (pa.hasHand) {
+      btns += `<button class="btn btn-choose-card" data-slot="hand">🃏 手牌（随机）</button>`;
+    }
+    chooseArea.innerHTML = btns;
+    chooseArea.style.display = 'flex';
+    chooseArea.querySelectorAll('.btn-choose-card').forEach(btn => {
+      btn.onclick = () => {
+        socket.emit('playCard', { chooseSlot: btn.dataset.slot });
+      };
+    });
+  } else if (isFanjianGuess) {
+    const suits = [
+      { suit: '♠', label: '♠ 黑桃' },
+      { suit: '♥', label: '♥ 红桃' },
+      { suit: '♣', label: '♣ 梅花' },
+      { suit: '♦', label: '♦ 方块' },
+    ];
+    chooseArea.innerHTML = suits.map(s =>
+      `<button class="btn btn-choose-card btn-suit" data-suit="${s.suit}">${s.label}</button>`
+    ).join('');
+    chooseArea.style.display = 'flex';
+    chooseArea.querySelectorAll('.btn-suit').forEach(btn => {
+      btn.onclick = () => {
+        socket.emit('playCard', { guessSuit: btn.dataset.suit });
+      };
+    });
+  } else {
+    chooseArea.style.display = 'none';
+    chooseArea.innerHTML = '';
+  }
 
   // Discard confirm button
   const discardBtn = $('#btnConfirmDiscard');
@@ -363,7 +641,7 @@ function renderGame() {
   }
 
   // Skill button
-  const skillHeroes = { liubei:'仁德', sunquan:'制衡', huanggai:'苦肉', huatuo:'青囊' };
+  const skillHeroes = { liubei:'仁德', sunquan:'制衡', huanggai:'苦肉', huatuo:'青囊', diaochan:'离间', sunshangxiang:'结姻' };
   const showSkill = isMyTurn && !pa && skillHeroes[me.hero];
   $('#btnSkill').style.display = showSkill ? '' : 'none';
   if (showSkill) {
@@ -378,6 +656,9 @@ function renderGame() {
   // 护驾: Cao Cao Lord, when I need to dodge (pending dodge targeting me)
   const showHujia = isLord && me.hero === 'caocao' && pa?.type === 'dodge' && pa.target === state.myId;
   $('#btnHujia').style.display = showHujia ? '' : 'none';
+  // 反间: Zhou Yu, during play phase, no pending action, has hand cards
+  const showFanjian = me.hero === 'zhouyu' && isMyTurn && !pa && me.hand.length > 0;
+  $('#btnFanjian').style.display = showFanjian ? '' : 'none';
 
   // ---- Render my info ----
   let myHpPips = '';
@@ -454,6 +735,7 @@ function renderGame() {
         selectingTarget = false;
         selectTargetFor = null;
         lordSkillTargeting = false;
+        fanjianTargeting = false;
         renderGame();
         return;
       }
