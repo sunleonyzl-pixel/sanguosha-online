@@ -259,6 +259,13 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   flex-wrap: wrap;
   justify-content: center;
   margin-top: 8px;
+  align-items: center;
+}
+.zhiheng-eq-selected {
+  background: linear-gradient(180deg, #e74c3c 0%, #c0392b 100%) !important;
+  color: #fff !important;
+  border-color: #e74c3c !important;
+  box-shadow: 0 0 12px rgba(231,76,60,0.3);
 }
 .btn-choose-card {
   background: linear-gradient(180deg, #5b4a8a 0%, #443670 100%);
@@ -958,6 +965,36 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   .btn-choose-card { font-size: 12px; padding: 7px 12px; }
 
   .music-toggle { width: 34px; height: 34px; font-size: 15px; top: 10px; right: 10px; }
+}
+
+/* ====== CARD ANNOUNCEMENT BANNER ====== */
+#cardBanner {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.5);
+  z-index: 9998;
+  font-family: 'Ma Shan Zheng', cursive;
+  font-size: clamp(48px, 10vw, 80px);
+  color: var(--red);
+  text-shadow:
+    0 2px 8px rgba(192,57,43,0.2),
+    0 0 40px rgba(231,76,60,0.15),
+    2px 2px 0 rgba(255,255,255,0.5);
+  letter-spacing: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  white-space: nowrap;
+}
+#cardBanner.show {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+#cardBanner.fade {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(1.2);
+  transition: all 0.4s ease-out;
 }
 
 /* ====== TOAST ====== */

@@ -245,6 +245,65 @@ function checkXiaoji(room, player) {
   }
 }
 
+// Post-damage skill chain: triggers character skills after damage is dealt
+function triggerPostDamageSkills(room, target, attacker, card) {
+  // 曹操 奸雄: obtain the card that caused damage
+  if (target.hero === 'caocao' && card) {
+    const dmgCard = room.discard.find(c => c.id === card.id);
+    if (dmgCard) {
+      room.discard = room.discard.filter(c => c.id !== dmgCard.id);
+      target.hand.push(dmgCard);
+      addLog(room, `曹操【奸雄】发动，获得了${dmgCard.name}`);
+      emitSound(room, '奸雄');
+    }
+  }
+  // 司马懿 反馈
+  if (target.hero === 'simayi' && attacker && attacker.hand.length > 0) {
+    const stolen = attacker.hand.splice(Math.floor(Math.random() * attacker.hand.length), 1)[0];
+    target.hand.push(stolen);
+    addLog(room, `司马懿【反馈】发动，获得${attacker.name}一张牌`);
+    emitSound(room, '反馈');
+    checkLianying(room, attacker);
+  }
+  // 夏侯惇 刚烈
+  if (target.hero === 'xiaohoudun' && attacker) {
+    const ganglie = room.deck.length > 0 ? room.deck.pop() : null;
+    if (ganglie) {
+      room.discard.push(ganglie);
+      if (ganglie.suit !== '♥') {
+        if (attacker.hand.length > 0) {
+          const lost = attacker.hand.splice(Math.floor(Math.random() * attacker.hand.length), 1)[0];
+          room.discard.push(lost);
+          addLog(room, `夏侯惇【刚烈】判定${ganglie.suit}${ganglie.number}非♥，${attacker.name}弃置一张牌`);
+          checkLianying(room, attacker);
+        } else {
+          attacker.hp -= 1;
+          addLog(room, `夏侯惇【刚烈】判定${ganglie.suit}${ganglie.number}非♥，${attacker.name}受到1点伤害`);
+          checkDeath(room, attacker, target);
+        }
+      } else {
+        addLog(room, `夏侯惇【刚烈】判定${ganglie.suit}${ganglie.number}为♥，无效`);
+      }
+    }
+  }
+  // 郭嘉 遗计
+  if (target.hero === 'guojia') {
+    drawCards(room, target, 2);
+    addLog(room, `郭嘉【遗计】发动，摸两张牌`);
+    emitSound(room, '遗计');
+  }
+  // 华雄 耀武
+  if (target.hero === 'huaxiong' && card && isRedCard(card) && attacker) {
+    if (attacker.hp < attacker.maxHp) {
+      attacker.hp++;
+      addLog(room, `华雄【耀武】：红色杀造成伤害，${attacker.name}回复1点体力`);
+    } else {
+      drawCards(room, attacker, 1);
+      addLog(room, `华雄【耀武】：红色杀造成伤害，${attacker.name}摸一张牌`);
+    }
+  }
+}
+
 function assignRoles(playerCount) {
   const roleMap = {
     2: ['lord','rebel'],
@@ -796,6 +855,7 @@ function handlePlayCard(room, player, data) {
           if (target.hand.length > 0) {
             const lost = target.hand.splice(Math.floor(Math.random() * target.hand.length), 1)[0];
             room.discard.push(lost);
+            checkLianying(room, target);
           } else {
             drawCards(room, player, 1);
           }
@@ -815,6 +875,7 @@ function handlePlayCard(room, player, data) {
             if (room.luoyiActive && player.hero === 'xuchu') tieqiDmg += 1;
             target.hp -= tieqiDmg;
             addLog(room, `${target.name} 受到${tieqiDmg}点伤害，体力值: ${target.hp}/${target.maxHp}`);
+            triggerPostDamageSkills(room, target, player, origCard);
             checkDeath(room, target, player);
             broadcastState(room);
             return;
@@ -1247,6 +1308,46 @@ function handleResponse(room, player, data) {
     return;
   }
 
+  // ====== 制衡 选择弃牌 ======
+  if (pa.type === 'zhiheng_select') {
+    if (player.id !== pa.playerId) return;
+    const handIds = data.zhihengHandIds || [];
+    const equipSlots = data.zhihengEquipSlots || [];
+    const totalCount = handIds.length + equipSlots.length;
+    if (totalCount === 0) {
+      // Cancel zhiheng
+      room.pendingAction = null;
+      addLog(room, `${player.name} 取消了【制衡】`);
+      broadcastState(room);
+      return;
+    }
+    // Remove selected hand cards
+    handIds.forEach(id => {
+      const c = player.hand.find(h => h.id === id);
+      if (c) {
+        removeCardFromHand(player, id);
+        room.discard.push(c);
+      }
+    });
+    // Remove selected equipment
+    equipSlots.forEach(slot => {
+      const c = player.equipment[slot];
+      if (c) {
+        player.equipment[slot] = null;
+        room.discard.push(c);
+        checkXiaoji(room, player);
+      }
+    });
+    checkLianying(room, player);
+    drawCards(room, player, totalCount);
+    room.zhihengUsed = true;
+    room.pendingAction = null;
+    addLog(room, `${player.name}【制衡】弃置${totalCount}张牌，摸${totalCount}张牌`);
+    emitSound(room, '制衡');
+    broadcastState(room);
+    return;
+  }
+
   // ====== 过河拆桥/顺手牵羊 选择目标牌 ======
   if (pa.type === 'choose_dismantle' || pa.type === 'choose_snatch') {
     if (player.id !== pa.source) return;
@@ -1311,6 +1412,7 @@ function handleResponse(room, player, data) {
       // Wrong guess: target takes 1 damage
       target.hp -= 1;
       addLog(room, `${target.name} 受到1点伤害（当前体力: ${target.hp}/${target.maxHp}）`);
+      triggerPostDamageSkills(room, target, source, null);
       if (target.hp <= 0) {
         checkDeath(room, target, source);
       }
@@ -1405,6 +1507,74 @@ function handleResponse(room, player, data) {
     return;
   }
 
+  // ====== 贯石斧 选择是否发动 ======
+  if (pa.type === 'guanshifu_choice') {
+    if (player.id !== pa.attackerId) return;
+    if (data.responseCardId === 'activate') {
+      // Enter selection mode
+      room.pendingAction = {
+        type: 'guanshifu_select',
+        attackerId: pa.attackerId,
+        targetId: pa.targetId,
+        card: pa.card,
+      };
+      addLog(room, `${player.name} 发动贯石斧，请选择弃置两张牌`);
+      broadcastState(room);
+    } else {
+      // Pass
+      addLog(room, `${player.name} 放弃发动贯石斧`);
+      room.pendingAction = null;
+      broadcastState(room);
+    }
+    return;
+  }
+
+  // ====== 贯石斧 选择弃置的牌 ======
+  if (pa.type === 'guanshifu_select') {
+    if (player.id !== pa.attackerId) return;
+    const handIds = data.gsfHandIds || [];
+    const equipSlots = data.gsfEquipSlots || [];
+    const totalCount = handIds.length + equipSlots.length;
+    if (totalCount !== 2) {
+      io.sockets.sockets.get(player.socketId)?.emit('error', '请选择恰好2张牌');
+      return;
+    }
+    // Validate: equipment slots cannot include weapon (贯石斧 itself)
+    if (equipSlots.includes('weapon')) {
+      io.sockets.sockets.get(player.socketId)?.emit('error', '不能弃置贯石斧本身');
+      return;
+    }
+    // Remove selected hand cards
+    handIds.forEach(id => {
+      const c = player.hand.find(h => h.id === id);
+      if (c) { removeCardFromHand(player, id); room.discard.push(c); }
+    });
+    // Remove selected equipment
+    equipSlots.forEach(slot => {
+      const c = player.equipment[slot];
+      if (c) { player.equipment[slot] = null; room.discard.push(c); checkXiaoji(room, player); }
+    });
+    checkLianying(room, player);
+    addLog(room, `贯石斧发动：${player.name} 弃置${totalCount}张牌，强制命中`);
+
+    const target = room.players.find(p => p.id === pa.targetId);
+    let gsDmg = 1;
+    if (room.turnWineUsed) { gsDmg = 2; room.turnWineUsed = false; }
+    if (room.luoyiActive) { gsDmg += 1; }
+    // 白银狮子
+    if (target.equipment.armor?.name === '白银狮子') {
+      gsDmg = Math.min(gsDmg, 1);
+      addLog(room, `白银狮子限制伤害为1点`);
+    }
+    target.hp -= gsDmg;
+    addLog(room, `${target.name} 受到${gsDmg}点伤害，体力值: ${target.hp}/${target.maxHp}`);
+    triggerPostDamageSkills(room, target, player, pa.card);
+    checkDeath(room, target, player);
+    room.pendingAction = null;
+    broadcastState(room);
+    return;
+  }
+
   // ====== 青龙偃月刀 选择是否再出杀 ======
   if (pa.type === 'qinglong_choice') {
     if (player.id !== pa.attackerId) return;
@@ -1482,20 +1652,22 @@ function handleResponse(room, player, data) {
         }
       }
 
-      // 贯石斧: discard 2 cards to force hit
-      if (attacker.equipment.weapon?.name === '贯石斧' && attacker.hand.length >= 2) {
-        const c1 = attacker.hand.shift();
-        const c2 = attacker.hand.shift();
-        room.discard.push(c1, c2);
-        addLog(room, `贯石斧发动：${attacker.name} 弃两张牌，强制命中`);
-        let gsDmg = 1;
-        if (room.turnWineUsed) { gsDmg = 2; room.turnWineUsed = false; }
-        target.hp -= gsDmg;
-        addLog(room, `${target.name} 受到${gsDmg}点伤害`);
-        checkDeath(room, target, attacker);
-        room.pendingAction = null;
-        broadcastState(room);
-        return;
+      // 贯石斧: ask player whether to discard 2 cards to force hit
+      if (attacker.equipment.weapon?.name === '贯石斧') {
+        // Count available cards: hand cards + equipment (excluding 贯石斧 itself)
+        let availCount = attacker.hand.length;
+        ['armor', 'plusHorse', 'minusHorse'].forEach(s => { if (attacker.equipment[s]) availCount++; });
+        if (availCount >= 2) {
+          room.pendingAction = {
+            type: 'guanshifu_choice',
+            attackerId: attacker.id,
+            targetId: target.id,
+            card: pa.card,
+          };
+          addLog(room, `贯石斧：${attacker.name} 可以弃置两张牌强制命中 ${target.name}`);
+          broadcastState(room);
+          return;
+        }
       }
 
       room.pendingAction = null;
@@ -1583,63 +1755,7 @@ function handleResponse(room, player, data) {
       target.hp -= damage;
       addLog(room, `${target.name} 受到${damage}点伤害，体力值: ${target.hp}/${target.maxHp}`);
 
-      // 曹操 奸雄: obtain the card that caused damage
-      if (target.hero === 'caocao' && pa.card) {
-        const dmgCard = room.discard.find(c => c.id === pa.card.id);
-        if (dmgCard) {
-          room.discard = room.discard.filter(c => c.id !== dmgCard.id);
-          target.hand.push(dmgCard);
-          addLog(room, `曹操【奸雄】发动，获得了${dmgCard.name}`);
-          emitSound(room, '奸雄');
-        }
-      }
-
-      // 司马懿 反馈
-      if (target.hero === 'simayi' && attacker && attacker.hand.length > 0) {
-        const stolen = attacker.hand.splice(Math.floor(Math.random() * attacker.hand.length), 1)[0];
-        target.hand.push(stolen);
-        addLog(room, `司马懿【反馈】发动，获得${attacker.name}一张牌`);
-        emitSound(room, '反馈');
-      }
-
-      // 夏侯惇 刚烈
-      if (target.hero === 'xiaohoudun' && attacker) {
-        const ganglie = room.deck.length > 0 ? room.deck.pop() : null;
-        if (ganglie) {
-          room.discard.push(ganglie);
-          if (ganglie.suit !== '♥') {
-            if (attacker.hand.length > 0) {
-              const lost = attacker.hand.splice(Math.floor(Math.random() * attacker.hand.length), 1)[0];
-              room.discard.push(lost);
-              addLog(room, `夏侯惇【刚烈】判定${ganglie.suit}${ganglie.number}非♥，${attacker.name}弃置一张牌`);
-            } else {
-              attacker.hp -= 1;
-              addLog(room, `夏侯惇【刚烈】判定${ganglie.suit}${ganglie.number}非♥，${attacker.name}受到1点伤害`);
-              checkDeath(room, attacker, target);
-            }
-          } else {
-            addLog(room, `夏侯惇【刚烈】判定${ganglie.suit}${ganglie.number}为♥，无效`);
-          }
-        }
-      }
-
-      // 郭嘉 遗计
-      if (target.hero === 'guojia') {
-        drawCards(room, target, 2);
-        addLog(room, `郭嘉【遗计】发动，摸两张牌`);
-        emitSound(room, '遗计');
-      }
-
-      // 华雄 耀武: when damaged by red 杀, attacker heals 1 HP or draws 1 card
-      if (target.hero === 'huaxiong' && pa.card && isRedCard(pa.card) && attacker) {
-        if (attacker.hp < attacker.maxHp) {
-          attacker.hp++;
-          addLog(room, `华雄【耀武】：红色杀造成伤害，${attacker.name}回复1点体力`);
-        } else {
-          drawCards(room, attacker, 1);
-          addLog(room, `华雄【耀武】：红色杀造成伤害，${attacker.name}摸一张牌`);
-        }
-      }
+      triggerPostDamageSkills(room, target, attacker, pa.card);
 
       // 麒麟弓: remove a horse from target
       if (attacker.equipment.weapon?.name === '麒麟弓') {
@@ -1698,6 +1814,7 @@ function handleResponse(room, player, data) {
       }
       player.hp -= duelDmg;
       addLog(room, `${player.name} 在决斗中受到${duelDmg}点伤害`);
+      triggerPostDamageSkills(room, player, dealer, pa.card);
       room.pendingAction = null;
       checkDeath(room, player, dealer);
       broadcastState(room);
@@ -1737,6 +1854,7 @@ function handleResponse(room, player, data) {
       const source = room.players.find(p => p.id === pa.source);
       player.hp -= 1;
       addLog(room, `${player.name} 受到【${pa.type === 'barbarian' ? '南蛮入侵' : '万箭齐发'}】1点伤害`);
+      triggerPostDamageSkills(room, player, source, pa.card);
       checkDeath(room, player, source);
     }
 
@@ -1847,7 +1965,8 @@ io.on('connection', (socket) => {
     const lordPlayer = currentRoom.players.find(p => p.role === 'lord');
     currentRoom.heroChoices[lordPlayer.id] = lordChoices;
 
-    addLog(currentRoom, '游戏开始！请主公先选择武将');
+    addLog(currentRoom, `身份已分配！${lordPlayer.name} 是本局【主公】`);
+    addLog(currentRoom, '请主公先选择武将');
     broadcastState(currentRoom);
   });
 
@@ -1968,6 +2087,7 @@ io.on('connection', (socket) => {
       const target = others[Math.floor(Math.random() * others.length)];
       const card = currentPlayer.hand.shift();
       target.hand.push(card);
+      checkLianying(currentRoom, currentPlayer);
       addLog(currentRoom, `${currentPlayer.name} 【仁德】将一张牌交给了 ${target.name}`);
       emitSound(currentRoom, '仁德');
       broadcastState(currentRoom);
@@ -1978,16 +2098,13 @@ io.on('connection', (socket) => {
         socket.emit('gameError', '制衡每回合只能使用一次');
         return;
       }
-      if (currentPlayer.hand.length === 0) return;
-      const discardCount = Math.min(2, currentPlayer.hand.length);
-      for (let i = 0; i < discardCount; i++) {
-        const c = currentPlayer.hand.shift();
-        currentRoom.discard.push(c);
-      }
-      drawCards(currentRoom, currentPlayer, discardCount);
-      currentRoom.zhihengUsed = true;
-      addLog(currentRoom, `${currentPlayer.name} 【制衡】弃置${discardCount}张牌，摸${discardCount}张牌`);
-      emitSound(currentRoom, '制衡');
+      if (currentPlayer.hand.length === 0 && !Object.values(currentPlayer.equipment).some(e => e)) return;
+      // Enter zhiheng selection mode
+      currentRoom.pendingAction = {
+        type: 'zhiheng_select',
+        playerId: currentPlayer.id,
+      };
+      addLog(currentRoom, `${currentPlayer.name} 发动【制衡】，请选择要弃置的牌`);
       broadcastState(currentRoom);
     }
     // 黄盖 苦肉
@@ -2012,6 +2129,7 @@ io.on('connection', (socket) => {
       const target = damaged[0];
       const card = currentPlayer.hand.shift();
       currentRoom.discard.push(card);
+      checkLianying(currentRoom, currentPlayer);
       target.hp = Math.min(target.hp + 1, target.maxHp);
       addLog(currentRoom, `${currentPlayer.name}【青囊】弃一牌，${target.name}回复1点体力`);
       broadcastState(currentRoom);

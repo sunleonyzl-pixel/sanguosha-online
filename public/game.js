@@ -8,6 +8,10 @@ let selectTargetFor = null;
 let lordSkillTargeting = false; // true when selecting target for 激将
 let fanjianTargeting = false; // true when selecting target for 反间
 let discardSelection = new Set(); // cards selected for discard phase
+let zhihengHandSelection = new Set(); // hand cards selected for zhiheng
+let zhihengEquipSelection = new Set(); // equipment slots selected for zhiheng
+let gsfHandSelection = new Set(); // hand cards selected for 贯石斧
+let gsfEquipSelection = new Set(); // equipment slots selected for 贯石斧
 
 // ====== BACKGROUND MUSIC (Web Audio API - Chinese pentatonic ambient) ======
 const BGM = (() => {
@@ -86,6 +90,8 @@ const BGM = (() => {
       if (playing) return;
       if (!ctx) init();
       if (ctx.state === 'suspended') ctx.resume();
+      // Reconnect in case it was disconnected by stop()
+      masterGain.connect(ctx.destination);
       playing = true;
       muted = false;
       playPhrase();
@@ -101,6 +107,8 @@ const BGM = (() => {
       playing = false;
       muted = true;
       if (intervalId) { clearInterval(intervalId); intervalId = null; }
+      // Disconnect to silence any scheduled notes
+      if (masterGain) masterGain.disconnect();
     },
     toggle() {
       if (muted || !playing) { this.start(); return true; }
@@ -122,42 +130,147 @@ document.addEventListener('click', function startMusic() {
   document.removeEventListener('click', startMusic);
 }, { once: true });
 
-// ====== CARD VOICE ANNOUNCEMENTS (SpeechSynthesis) ======
-const CardVoice = (() => {
-  let zhVoice = null;
-  let ready = false;
+// ====== CARD SOUND & VISUAL ANNOUNCEMENT ======
+const CardAnnounce = (() => {
+  let audioCtx = null;
 
-  function findVoice() {
-    const voices = speechSynthesis.getVoices();
-    zhVoice = voices.find(v => v.lang.startsWith('zh')) || null;
-    ready = true;
+  function getCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
   }
 
-  if (typeof speechSynthesis !== 'undefined') {
-    speechSynthesis.onvoiceschanged = findVoice;
-    findVoice();
+  // Different tones for card categories
+  const TONES = {
+    attack:  [523.25, 659.25],       // C5 E5 - sharp
+    dodge:   [440, 523.25],           // A4 C5 - quick
+    heal:    [392, 493.88, 587.33],   // G4 B4 D5 - warm rising
+    trick:   [349.23, 440, 523.25],   // F4 A4 C5 - dramatic
+    equip:   [261.63, 329.63],        // C4 E4 - solid
+    skill:   [440, 587.33, 698.46],   // A4 D5 F5 - heroic
+    default: [523.25, 440],           // C5 A4
+  };
+
+  const CARD_CATEGORY = {
+    '杀': 'attack', '武圣': 'attack',
+    '闪': 'dodge',
+    '桃': 'heal', '酒': 'heal', '桃园结义': 'heal',
+    '决斗': 'trick', '南蛮入侵': 'trick', '万箭齐发': 'trick',
+    '无中生有': 'trick', '过河拆桥': 'trick', '顺手牵羊': 'trick',
+    '乐不思蜀': 'trick', '兵粮寸断': 'trick', '闪电': 'trick',
+    '无懈可击': 'trick',
+    '装备': 'equip',
+    '鬼才': 'skill', '奸雄': 'skill', '反馈': 'skill', '遗计': 'skill',
+    '仁德': 'skill', '制衡': 'skill', '苦肉': 'skill', '反间': 'skill',
+    '离间': 'skill', '结姻': 'skill', '奇袭': 'skill', '国色': 'skill',
+  };
+
+  function playTone(text) {
+    try {
+      const ctx = getCtx();
+      const cat = CARD_CATEGORY[text] || 'default';
+      const freqs = TONES[cat];
+      const now = ctx.currentTime;
+      freqs.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = cat === 'skill' ? 'triangle' : cat === 'attack' ? 'sawtooth' : 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, now + i * 0.1);
+        gain.gain.linearRampToValueAtTime(0.18, now + i * 0.1 + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.1 + 0.4);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + i * 0.1);
+        osc.stop(now + i * 0.1 + 0.5);
+      });
+    } catch(e) { /* ignore audio errors */ }
+  }
+
+  function showBanner(text) {
+    // Remove existing banner
+    const old = document.getElementById('cardBanner');
+    if (old) old.remove();
+    const el = document.createElement('div');
+    el.id = 'cardBanner';
+    el.textContent = text;
+    document.body.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    setTimeout(() => {
+      el.classList.remove('show');
+      el.classList.add('fade');
+      setTimeout(() => el.remove(), 500);
+    }, 1200);
   }
 
   return {
-    speak(text) {
+    announce(text) {
+      playTone(text);
+      showBanner(text);
+      speakText(text);
+    }
+  };
+})();
+
+// ====== SPEECH SYNTHESIS (语音播报) ======
+const SpeechEngine = (() => {
+  let unlocked = false;
+  let zhVoice = null;
+
+  function findVoice() {
+    if (typeof speechSynthesis === 'undefined') return;
+    const voices = speechSynthesis.getVoices();
+    // Prefer zh-CN, fallback to any zh
+    zhVoice = voices.find(v => v.lang === 'zh-CN')
+           || voices.find(v => v.lang.startsWith('zh'))
+           || null;
+  }
+
+  // Voices load asynchronously in some browsers
+  if (typeof speechSynthesis !== 'undefined') {
+    findVoice();
+    speechSynthesis.onvoiceschanged = findVoice;
+  }
+
+  return {
+    unlock() {
+      // Must be called from a user gesture (click) to unlock speech
+      if (unlocked) return;
       if (typeof speechSynthesis === 'undefined') return;
-      if (!ready) findVoice();
-      // Cancel any ongoing speech to avoid queue buildup
+      unlocked = true;
+      findVoice();
+      // Speak a silent utterance to unlock the API
+      const u = new SpeechSynthesisUtterance('');
+      u.volume = 0;
+      u.lang = 'zh-CN';
+      speechSynthesis.speak(u);
+    },
+    speak(text) {
+      if (!unlocked || typeof speechSynthesis === 'undefined') return;
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'zh-CN';
-      u.rate = 1.1;
+      u.rate = 1.0;
       u.pitch = 1.0;
-      u.volume = 0.8;
+      u.volume = 1.0;
       if (zhVoice) u.voice = zhVoice;
       speechSynthesis.speak(u);
     }
   };
 })();
 
+function speakText(text) {
+  SpeechEngine.speak(text);
+}
+
+// Unlock speech on first user click
+document.addEventListener('click', function unlockSpeech() {
+  SpeechEngine.unlock();
+}, { once: true });
+
 // Listen for card sound events from server
 socket.on('cardSound', (text) => {
-  CardVoice.speak(text);
+  CardAnnounce.announce(text);
 });
 
 
@@ -231,6 +344,10 @@ $('#btnRespond').onclick = () => { socket.emit('playCard', {}); selectedCardId =
 $('#btnBackLobby').onclick = () => {
   state = null;
   discardSelection.clear();
+  zhihengHandSelection.clear();
+  zhihengEquipSelection.clear();
+  gsfHandSelection.clear();
+  gsfEquipSelection.clear();
   selectedCardId = null;
   selectingTarget = false;
   selectTargetFor = null;
@@ -273,7 +390,33 @@ $('#btnFanjian').onclick = () => {
 $('#btnConfirmDiscard').onclick = () => {
   if (!state) return;
   const pa = state.pendingAction;
-  if (!pa || pa.type !== 'discard') return;
+  if (!pa) return;
+  // Zhiheng confirm
+  if (pa.type === 'zhiheng_select' && pa.playerId === state.myId) {
+    const total = zhihengHandSelection.size + zhihengEquipSelection.size;
+    if (total === 0) { showToast('请至少选择一张牌'); return; }
+    socket.emit('playCard', {
+      zhihengHandIds: [...zhihengHandSelection],
+      zhihengEquipSlots: [...zhihengEquipSelection],
+    });
+    zhihengHandSelection.clear();
+    zhihengEquipSelection.clear();
+    return;
+  }
+  // Guanshifu confirm
+  if (pa.type === 'guanshifu_select' && pa.attackerId === state.myId) {
+    const total = gsfHandSelection.size + gsfEquipSelection.size;
+    if (total !== 2) { showToast('请选择恰好2张牌'); return; }
+    socket.emit('playCard', {
+      gsfHandIds: [...gsfHandSelection],
+      gsfEquipSlots: [...gsfEquipSelection],
+    });
+    gsfHandSelection.clear();
+    gsfEquipSelection.clear();
+    return;
+  }
+  // Normal discard
+  if (pa.type !== 'discard') return;
   if (discardSelection.size !== pa.count) {
     showToast(`请选择恰好 ${pa.count} 张牌`);
     return;
@@ -300,6 +443,16 @@ socket.on('gameState', (gs) => {
   // Clear discard selection if we're no longer in discard phase
   if (!gs.pendingAction || gs.pendingAction.type !== 'discard' || gs.pendingAction.playerId !== gs.myId) {
     discardSelection.clear();
+  }
+  // Clear zhiheng selection if no longer in zhiheng phase
+  if (!gs.pendingAction || gs.pendingAction.type !== 'zhiheng_select' || gs.pendingAction.playerId !== gs.myId) {
+    zhihengHandSelection.clear();
+    zhihengEquipSelection.clear();
+  }
+  // Clear guanshifu selection if no longer in gsf phase
+  if (!gs.pendingAction || gs.pendingAction.type !== 'guanshifu_select' || gs.pendingAction.attackerId !== gs.myId) {
+    gsfHandSelection.clear();
+    gsfEquipSelection.clear();
   }
   render();
 });
@@ -493,8 +646,19 @@ function renderGame() {
         const targetPlayer = state.players.find(p => p.id === pa.targetId);
         responseHint = `青龙偃月刀：是否对 ${targetPlayer?.name||''} 再出一张【杀】？选择手中的杀或点击"不出"放弃`;
       }
+    } else if (pa.type === 'guanshifu_choice') {
+      if (pa.attackerId === state.myId) {
+        myPendingResponse = true;
+        responseHint = '贯石斧：是否弃置两张牌强制命中？点击"发动"或"不出"放弃';
+      }
+    } else if (pa.type === 'guanshifu_select') {
+      // Handled separately below, not a simple response
     }
   }
+
+  // Detect zhiheng selection phase
+  const isZhihengSelect = pa?.type === 'zhiheng_select' && pa.playerId === state.myId;
+  const isGsfSelect = pa?.type === 'guanshifu_select' && pa.attackerId === state.myId;
 
   // Detect discard phase for me
   const isDiscardPhase = pa?.type === 'discard' && pa.playerId === state.myId;
@@ -573,6 +737,12 @@ function renderGame() {
   const hintEl = $('#actionHint');
   if (isDiscardPhase) {
     hintEl.textContent = `弃牌阶段 — 请选择 ${pa.count} 张牌弃置（已选 ${discardSelection.size}/${pa.count}）`;
+  } else if (isZhihengSelect) {
+    const total = zhihengHandSelection.size + zhihengEquipSelection.size;
+    hintEl.textContent = `【制衡】请选择要弃置的手牌和/或装备（已选 ${total} 张），然后点击确认`;
+  } else if (isGsfSelect) {
+    const total = gsfHandSelection.size + gsfEquipSelection.size;
+    hintEl.textContent = `【贯石斧】请选择弃置2张牌（已选 ${total}/2），不能弃贯石斧本身`;
   } else if (myPendingResponse) {
     hintEl.textContent = responseHint;
   } else if (lordSkillTargeting && selectingTarget) {
@@ -627,6 +797,44 @@ function renderGame() {
         socket.emit('playCard', { guessSuit: btn.dataset.suit });
       };
     });
+  } else if (pa?.type === 'guanshifu_choice' && pa.attackerId === state.myId) {
+    // Show "发动" and "放弃" buttons
+    chooseArea.innerHTML = `<button class="btn btn-gold" id="btnGsfActivate">发动贯石斧</button><button class="btn btn-danger" id="btnGsfPass">放弃</button>`;
+    chooseArea.style.display = 'flex';
+    document.getElementById('btnGsfActivate').onclick = () => {
+      socket.emit('playCard', { responseCardId: 'activate' });
+    };
+    document.getElementById('btnGsfPass').onclick = () => {
+      socket.emit('playCard', {});
+    };
+    // Hide the default respond button for this case
+    $('#btnRespond').style.display = 'none';
+  } else if (isGsfSelect) {
+    // Show equipment selection for 贯石斧 (excluding weapon slot)
+    const equipSlots = ['armor', 'plusHorse', 'minusHorse'];
+    const slotLabels = { armor: '🛡防具', plusHorse: '🐎+1马', minusHorse: '🐎-1马' };
+    let eqBtns = '';
+    equipSlots.forEach(slot => {
+      if (me.equipment?.[slot]) {
+        const sel = gsfEquipSelection.has(slot);
+        eqBtns += `<button class="btn btn-choose-card ${sel ? 'zhiheng-eq-selected' : ''}" data-gsfslot="${slot}">${slotLabels[slot]} ${me.equipment[slot].name}</button>`;
+      }
+    });
+    if (eqBtns) eqBtns = '<span style="font-size:12px;color:var(--wood);margin-right:4px;">装备:</span>' + eqBtns;
+    chooseArea.innerHTML = eqBtns;
+    chooseArea.style.display = eqBtns ? 'flex' : 'none';
+    chooseArea.querySelectorAll('[data-gsfslot]').forEach(btn => {
+      btn.onclick = () => {
+        const slot = btn.dataset.gsfslot;
+        if (gsfEquipSelection.has(slot)) gsfEquipSelection.delete(slot);
+        else {
+          const total = gsfHandSelection.size + gsfEquipSelection.size;
+          if (total < 2) gsfEquipSelection.add(slot);
+        }
+        renderGame();
+      };
+    });
+    $('#btnRespond').style.display = 'none';
   } else {
     chooseArea.style.display = 'none';
     chooseArea.innerHTML = '';
@@ -634,10 +842,60 @@ function renderGame() {
 
   // Discard confirm button
   const discardBtn = $('#btnConfirmDiscard');
-  discardBtn.style.display = isDiscardPhase ? '' : 'none';
-  if (isDiscardPhase) {
+  if (isZhihengSelect) {
+    // Reuse discard confirm button for zhiheng
+    const zhTotal = zhihengHandSelection.size + zhihengEquipSelection.size;
+    discardBtn.style.display = '';
+    discardBtn.disabled = zhTotal === 0;
+    discardBtn.textContent = zhTotal > 0 ? `确认制衡 (${zhTotal}张)` : '请选牌';
+  } else if (isGsfSelect) {
+    const gsfTotal = gsfHandSelection.size + gsfEquipSelection.size;
+    discardBtn.style.display = '';
+    discardBtn.disabled = gsfTotal !== 2;
+    discardBtn.textContent = `确认弃牌 (${gsfTotal}/2)`;
+  } else if (isDiscardPhase) {
+    discardBtn.style.display = '';
     discardBtn.disabled = discardSelection.size !== pa.count;
     discardBtn.textContent = `确认弃牌 (${discardSelection.size}/${pa.count})`;
+  } else {
+    discardBtn.style.display = 'none';
+  }
+
+  // Zhiheng equipment selection area
+  if (isZhihengSelect) {
+    const equipSlots = ['weapon', 'armor', 'plusHorse', 'minusHorse'];
+    const slotLabels = { weapon: '⚔武器', armor: '🛡防具', plusHorse: '🐎+1马', minusHorse: '🐎-1马' };
+    let eqBtns = '';
+    equipSlots.forEach(slot => {
+      if (me.equipment?.[slot]) {
+        const sel = zhihengEquipSelection.has(slot);
+        eqBtns += `<button class="btn btn-choose-card ${sel ? 'zhiheng-eq-selected' : ''}" data-zhslot="${slot}">${slotLabels[slot]} ${me.equipment[slot].name}</button>`;
+      }
+    });
+    if (eqBtns) {
+      eqBtns = '<span style="font-size:12px;color:var(--wood);margin-right:4px;">装备:</span>' + eqBtns;
+      eqBtns += `<button class="btn btn-danger" id="btnZhihengCancel" style="margin-left:8px;">取消</button>`;
+    } else {
+      eqBtns = `<button class="btn btn-danger" id="btnZhihengCancel">取消制衡</button>`;
+    }
+    chooseArea.innerHTML = eqBtns;
+    chooseArea.style.display = 'flex';
+    chooseArea.querySelectorAll('[data-zhslot]').forEach(btn => {
+      btn.onclick = () => {
+        const slot = btn.dataset.zhslot;
+        if (zhihengEquipSelection.has(slot)) zhihengEquipSelection.delete(slot);
+        else zhihengEquipSelection.add(slot);
+        renderGame();
+      };
+    });
+    const cancelBtn = document.getElementById('btnZhihengCancel');
+    if (cancelBtn) {
+      cancelBtn.onclick = () => {
+        zhihengHandSelection.clear();
+        zhihengEquipSelection.clear();
+        socket.emit('playCard', { zhihengHandIds: [], zhihengEquipSlots: [] });
+      };
+    }
   }
 
   // Skill button
@@ -697,7 +955,9 @@ function renderGame() {
     const typeLabel = c.type === 'basic' ? '基本' : c.type === 'trick' ? '锦囊' : '装备';
     const isSelected = selectedCardId === c.id;
     const isDiscardSelected = discardSelection.has(c.id);
-    return `<div class="hand-card ${typeClass} ${isSelected ? 'selected' : ''} ${isDiscardSelected ? 'discard-selected' : ''}" data-cid="${c.id}" data-subtype="${c.subtype}">
+    const isZhihengSelected = zhihengHandSelection.has(c.id);
+    const isGsfSelected = gsfHandSelection.has(c.id);
+    return `<div class="hand-card ${typeClass} ${isSelected ? 'selected' : ''} ${isDiscardSelected ? 'discard-selected' : ''} ${isZhihengSelected || isGsfSelected ? 'discard-selected' : ''}" data-cid="${c.id}" data-subtype="${c.subtype}">
       <div class="card-suit-number ${isRed ? 'red' : 'black'}">${c.suit}${c.number}</div>
       <div class="card-name">${c.name}</div>
       <div class="card-type-label">${typeLabel}</div>
@@ -708,6 +968,26 @@ function renderGame() {
     el.onclick = () => {
       const cardId = parseInt(el.dataset.cid);
       const subtype = el.dataset.subtype;
+
+      // Zhiheng phase: toggle selection
+      if (isZhihengSelect) {
+        if (zhihengHandSelection.has(cardId)) zhihengHandSelection.delete(cardId);
+        else zhihengHandSelection.add(cardId);
+        renderGame();
+        return;
+      }
+
+      // Guanshifu select phase: toggle selection
+      if (isGsfSelect) {
+        if (gsfHandSelection.has(cardId)) {
+          gsfHandSelection.delete(cardId);
+        } else {
+          const total = gsfHandSelection.size + gsfEquipSelection.size;
+          if (total < 2) gsfHandSelection.add(cardId);
+        }
+        renderGame();
+        return;
+      }
 
       // Discard phase: toggle selection
       if (isDiscardPhase) {
