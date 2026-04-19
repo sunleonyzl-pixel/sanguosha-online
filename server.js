@@ -134,6 +134,7 @@ function createRoom(roomId, hostName) {
     turnAttackCount: 0,
     turnWineUsed: false, // has wine been used this turn (for +1 damage on next attack)
     luoyiActive: false, // 许褚 裸衣 active this turn
+    turnFanjianUsed: false, // 周瑜 反间 once per turn
   };
 }
 
@@ -189,9 +190,53 @@ function getPlayerView(room, playerId) {
     })() : null,
     turnAttackCount: room.turnAttackCount,
     turnWineUsed: room.turnWineUsed,
+    turnFanjianUsed: room.turnFanjianUsed || false,
     heroSelectPhase: room.heroSelectPhase || null,
     heroChoices: room.heroChoices?.[playerId] || null,
     isAdmin: !!(room.players.find(p => p.id === playerId)?.isAdmin),
+  };
+}
+
+function getSpectatorView(room) {
+  return {
+    roomId: room.id,
+    hostId: room.hostId,
+    state: room.state,
+    myId: '__spectator__',
+    isSpectator: true,
+    players: room.players.map(p => ({
+      id: p.id,
+      name: p.name,
+      hero: p.hero,
+      hp: p.hp,
+      maxHp: p.maxHp,
+      role: (room.state === 'finished' || p.role === 'lord') ? p.role : null,
+      handCount: p.hand.length,
+      hand: [],
+      equipment: p.equipment,
+      judgments: p.judgments || [],
+      alive: p.alive,
+      disconnected: !!p.disconnected,
+      kingdom: p.hero ? HEROES[p.hero]?.kingdom : null,
+      skill: p.hero ? HEROES[p.hero]?.skill : null,
+      skillDesc: p.hero ? HEROES[p.hero]?.skillDesc : null,
+    })),
+    currentPlayerIdx: room.currentPlayerIdx,
+    turnPhase: room.turnPhase,
+    deckCount: room.deck.length,
+    log: room.log.slice(-50),
+    pendingAction: room.pendingAction ? (() => {
+      const pa = { ...room.pendingAction };
+      delete pa.onResolve;
+      delete pa.onNullify;
+      return pa;
+    })() : null,
+    turnAttackCount: room.turnAttackCount,
+    turnWineUsed: room.turnWineUsed,
+    turnFanjianUsed: room.turnFanjianUsed || false,
+    heroSelectPhase: room.heroSelectPhase || null,
+    heroChoices: null,
+    isAdmin: false,
   };
 }
 
@@ -200,6 +245,14 @@ function broadcastState(room) {
     const sock = io.sockets.sockets.get(p.socketId);
     if (sock) sock.emit('gameState', getPlayerView(room, p.id));
   });
+  // Also send to spectators
+  if (room.spectators) {
+    const sv = getSpectatorView(room);
+    room.spectators.forEach(s => {
+      const sock = io.sockets.sockets.get(s.socketId);
+      if (sock) sock.emit('gameState', sv);
+    });
+  }
 }
 
 function drawCards(room, player, count) {
@@ -482,6 +535,7 @@ function startTurn(room) {
   room.turnAttackCount = 0;
   room.turnWineUsed = false;
   room.luoyiActive = false;
+  room.turnFanjianUsed = false;
   room.zhihengUsed = false;
   room.pendingAction = null;
   addLog(room, `── ${player.name} 的回合开始 ──`);
@@ -974,7 +1028,7 @@ function handlePlayCard(room, player, data) {
       startNullifyChance(room, '决斗', player.id, target.id, () => {
         // 吕布 无双: opponent needs 2 attacks per round in duel
         const lvbuInDuel = player.hero === 'lvbu' || target.hero === 'lvbu';
-        room.pendingAction = { type: 'duel', players: [target.id, player.id], currentIdx: 0, source: player.id, lvbuInDuel, attacksNeeded: lvbuInDuel ? 2 : 1, attacksGiven: 0 };
+        room.pendingAction = { type: 'duel', players: [target.id, player.id], currentIdx: 0, source: player.id, lvbuInDuel, attacksNeeded: lvbuInDuel ? 2 : 1, attacksGiven: 0, card: card };
         broadcastState(room);
       });
       break;
@@ -1353,13 +1407,27 @@ function applyAttackDamage(room, attacker, target, card, dodgesNeeded) {
   triggerPostDamageSkills(room, target, attacker, card);
 
   // 麒麟弓: remove a horse from target
-  if (attacker.equipment.weapon?.name === '麒麟弓') {
-    if (target.equipment.plusHorse) {
+  if (attacker.equipment.weapon?.name === '麒麟弓' && target.alive) {
+    const hasPlus = !!target.equipment.plusHorse;
+    const hasMinus = !!target.equipment.minusHorse;
+    if (hasPlus && hasMinus) {
+      // Both horses — let attacker choose
+      room.pendingAction = {
+        type: 'qilin_choose',
+        attackerId: attacker.id,
+        targetId: target.id,
+        plusName: target.equipment.plusHorse.name,
+        minusName: target.equipment.minusHorse.name,
+      };
+      addLog(room, `麒麟弓发动：请选择弃置${target.name}的哪匹马`);
+      broadcastState(room);
+      return; // Wait for attacker's choice; checkDeath will be called after
+    } else if (hasPlus) {
       addLog(room, `麒麟弓发动：弃置${target.name}的${target.equipment.plusHorse.name}`);
       room.discard.push(target.equipment.plusHorse);
       target.equipment.plusHorse = null;
       checkXiaoji(room, target);
-    } else if (target.equipment.minusHorse) {
+    } else if (hasMinus) {
       addLog(room, `麒麟弓发动：弃置${target.name}的${target.equipment.minusHorse.name}`);
       room.discard.push(target.equipment.minusHorse);
       target.equipment.minusHorse = null;
@@ -1767,6 +1835,31 @@ function handleResponse(room, player, data) {
   }
 
   // ====== 贯石斧 选择是否发动 ======
+  // ====== 麒麟弓 选择拆马 ======
+  if (pa.type === 'qilin_choose') {
+    if (player.id !== pa.attackerId) return;
+    const target = room.players.find(p => p.id === pa.targetId);
+    if (!target) { room.pendingAction = null; broadcastState(room); return; }
+    const slot = data.horseSlot; // 'plusHorse' or 'minusHorse'
+    if (slot !== 'plusHorse' && slot !== 'minusHorse') {
+      io.sockets.sockets.get(player.socketId)?.emit('error', '请选择一匹马');
+      return;
+    }
+    if (!target.equipment[slot]) {
+      io.sockets.sockets.get(player.socketId)?.emit('error', '该马已不存在');
+      return;
+    }
+    const horseName = target.equipment[slot].name;
+    addLog(room, `麒麟弓发动：弃置${target.name}的${horseName}`);
+    room.discard.push(target.equipment[slot]);
+    target.equipment[slot] = null;
+    checkXiaoji(room, target);
+    room.pendingAction = null;
+    checkDeath(room, target, player);
+    broadcastState(room);
+    return;
+  }
+
   if (pa.type === 'guanshifu_choice') {
     if (player.id !== pa.attackerId) return;
     if (data.responseCardId === 'activate') {
@@ -2066,6 +2159,45 @@ io.on('connection', (socket) => {
   let currentRoom = null;
   let currentPlayer = null;
 
+  // ====== Room list for lobby ======
+  socket.on('listRooms', () => {
+    const list = [];
+    rooms.forEach((room, id) => {
+      const alivePlayers = room.players.filter(p => !p.disconnected);
+      if (alivePlayers.length === 0) return;
+      list.push({
+        roomId: id,
+        state: room.state,
+        playerCount: alivePlayers.length,
+        playerNames: alivePlayers.map(p => p.name),
+        spectatorCount: (room.spectators || []).length,
+      });
+    });
+    socket.emit('roomList', list);
+  });
+
+  // ====== Spectate a room ======
+  socket.on('spectateRoom', ({ roomId, playerName }) => {
+    const room = rooms.get(roomId);
+    if (!room) { socket.emit('error', '房间不存在'); return; }
+    if (room.state === 'waiting') { socket.emit('error', '游戏尚未开始，请直接加入房间'); return; }
+    if (!room.spectators) room.spectators = [];
+    const spectator = {
+      id: socket.id,
+      socketId: socket.id,
+      name: (playerName || '观众') + '(观战)',
+    };
+    room.spectators.push(spectator);
+    socket.join(roomId);
+    currentRoom = room;
+    currentPlayer = null; // spectators are not players
+    addLog(room, `${spectator.name} 进入观战`);
+    socket.emit('spectateJoined', { roomId });
+    // Send current game state (spectator view: see all public info, no hand)
+    socket.emit('gameState', getSpectatorView(room));
+    broadcastState(room);
+  });
+
   socket.on('createRoom', ({ playerName, adminKey }) => {
     const roomId = String(Math.floor(Math.random() * 90 + 10));
     const room = createRoom(roomId);
@@ -2352,6 +2484,21 @@ io.on('connection', (socket) => {
         broadcastState(currentRoom);
         break;
       }
+      case 'qilin_choose': {
+        // Auto-pick plusHorse if exists, else minusHorse
+        const qTarget = currentRoom.players.find(p => p.id === pa.targetId);
+        if (qTarget) {
+          const slot = qTarget.equipment.plusHorse ? 'plusHorse' : 'minusHorse';
+          if (qTarget.equipment[slot]) {
+            addLog(currentRoom, `麒麟弓发动：弃置${qTarget.name}的${qTarget.equipment[slot].name}`);
+            currentRoom.discard.push(qTarget.equipment[slot]);
+            qTarget.equipment[slot] = null;
+          }
+        }
+        currentRoom.pendingAction = null;
+        broadcastState(currentRoom);
+        break;
+      }
       case 'discard': {
         // Force discard: auto-discard from the end of hand
         const discardPlayer = currentRoom.players.find(p => p.id === pa.playerId);
@@ -2547,13 +2694,16 @@ io.on('connection', (socket) => {
     }
     // 周瑜 反间
     if (currentPlayer.hero === 'zhouyu' && skillType === 'fanjian') {
+      if (currentRoom.turnFanjianUsed) { socket.emit('error', '反间每回合只能使用一次'); return; }
       if (currentPlayer.hand.length === 0) { socket.emit('error', '没有手牌'); return; }
       if (!targetId) { socket.emit('error', '请选择目标'); return; }
       const target = currentRoom.players.find(p => p.id === targetId);
       if (!target || !target.alive || target.id === currentPlayer.id) { socket.emit('error', '无效目标'); return; }
-      // Pick a random card from Zhou Yu's hand to show
-      const cardIdx = Math.floor(Math.random() * currentPlayer.hand.length);
-      const card = currentPlayer.hand[cardIdx];
+      // Player chooses which card to use
+      const cardId = data.cardId;
+      const card = cardId != null ? currentPlayer.hand.find(c => c.id === cardId) : null;
+      if (!card) { socket.emit('error', '请选择一张手牌'); return; }
+      currentRoom.turnFanjianUsed = true;
       addLog(currentRoom, `${currentPlayer.name} 对 ${target.name} 发动了【反间】`);
       emitSound(currentRoom, '反间');
       currentRoom.pendingAction = {
@@ -2717,6 +2867,7 @@ io.on('connection', (socket) => {
     currentRoom.pendingAction = null;
     currentRoom.turnAttackCount = 0;
     currentRoom.turnWineUsed = false;
+    currentRoom.turnFanjianUsed = false;
     currentRoom.luoyiActive = false;
     currentRoom.log = [];
     currentRoom.heroSelectPhase = null;
@@ -2772,9 +2923,20 @@ io.on('connection', (socket) => {
         checkWinCondition(currentRoom);
       }
       broadcastState(currentRoom);
-      // Only delete room if ALL players disconnected
+      // Only delete room if ALL players and spectators disconnected
       const connected = currentRoom.players.filter(p => !p.disconnected);
-      if (connected.length === 0) {
+      const specCount = (currentRoom.spectators || []).length;
+      if (connected.length === 0 && specCount === 0) {
+        rooms.delete(currentRoom.id);
+      }
+    } else if (currentRoom && !currentPlayer) {
+      // Spectator disconnected
+      if (currentRoom.spectators) {
+        currentRoom.spectators = currentRoom.spectators.filter(s => s.socketId !== socket.id);
+      }
+      const connected = currentRoom.players.filter(p => !p.disconnected);
+      const specCount = (currentRoom.spectators || []).length;
+      if (connected.length === 0 && specCount === 0) {
         rooms.delete(currentRoom.id);
       }
     }

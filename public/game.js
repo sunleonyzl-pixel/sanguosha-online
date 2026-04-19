@@ -7,6 +7,7 @@ let selectingTarget = false;
 let selectTargetFor = null;
 let lordSkillTargeting = false; // true when selecting target for 激将
 let fanjianTargeting = false; // true when selecting target for 反间
+let fanjianCardId = null; // selected card for 反间
 let qixiMode = false; // true when in 奇袭 card+target selection mode
 let qixiCardId = null; // selected black card for 奇袭
 let discardSelection = new Set(); // cards selected for discard phase
@@ -216,12 +217,14 @@ const CardAnnounce = (() => {
 
 // ====== SPEECH SYNTHESIS (语音播报) ======
 const SpeechEngine = (() => {
+  const supported = typeof speechSynthesis !== 'undefined';
   let unlocked = false;
   let zhVoice = null;
   let voicesReady = false;
+  let pendingQueue = []; // queue speech requests before unlock
 
   function findVoice() {
-    if (typeof speechSynthesis === 'undefined') return;
+    if (!supported) return;
     const voices = speechSynthesis.getVoices();
     if (voices.length === 0) return;
     voicesReady = true;
@@ -234,43 +237,66 @@ const SpeechEngine = (() => {
   }
 
   // Voices load asynchronously in some browsers
-  if (typeof speechSynthesis !== 'undefined') {
+  if (supported) {
     findVoice();
     speechSynthesis.onvoiceschanged = findVoice;
-    // Some browsers need a polling fallback
+    // Polling fallback for mobile browsers that don't fire onvoiceschanged
     let retries = 0;
     const pollVoices = setInterval(() => {
       findVoice();
       retries++;
-      if (voicesReady || retries > 20) clearInterval(pollVoices);
+      if (voicesReady || retries > 40) clearInterval(pollVoices);
     }, 250);
+  }
+
+  function doSpeak(text) {
+    if (!supported) return;
+    if (!voicesReady) findVoice();
+    try { speechSynthesis.cancel(); } catch(e) {}
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'zh-CN';
+    u.rate = 1.1;
+    u.pitch = 1.0;
+    u.volume = 1.0;
+    if (zhVoice) u.voice = zhVoice;
+    speechSynthesis.speak(u);
+    // iOS Safari bug: speechSynthesis can pause itself after ~15s.
+    // Resuming periodically prevents this.
+    let resumeTimer = setInterval(() => {
+      if (!speechSynthesis.speaking) { clearInterval(resumeTimer); return; }
+      speechSynthesis.pause();
+      speechSynthesis.resume();
+    }, 5000);
+    u.onend = () => clearInterval(resumeTimer);
+    u.onerror = () => clearInterval(resumeTimer);
   }
 
   return {
     unlock() {
-      if (typeof speechSynthesis === 'undefined') return;
-      if (!unlocked) {
-        unlocked = true;
-        findVoice();
-        // Speak a silent utterance to unlock the API
-        const u = new SpeechSynthesisUtterance('');
-        u.volume = 0;
-        u.lang = 'zh-CN';
-        speechSynthesis.speak(u);
+      if (!supported || unlocked) return;
+      unlocked = true;
+      findVoice();
+      // iOS requires a real (non-empty) utterance from user gesture to unlock
+      const u = new SpeechSynthesisUtterance('\u200B'); // zero-width space
+      u.volume = 0.01;
+      u.lang = 'zh-CN';
+      try { speechSynthesis.speak(u); } catch(e) {}
+      // Flush any queued speech
+      if (pendingQueue.length > 0) {
+        const last = pendingQueue[pendingQueue.length - 1];
+        pendingQueue = [];
+        setTimeout(() => doSpeak(last), 200);
       }
     },
     speak(text) {
-      if (!unlocked || typeof speechSynthesis === 'undefined') return;
-      // Re-find voice if not ready yet
-      if (!voicesReady) findVoice();
-      speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'zh-CN';
-      u.rate = 1.1;
-      u.pitch = 1.0;
-      u.volume = 1.0;
-      if (zhVoice) u.voice = zhVoice;
-      speechSynthesis.speak(u);
+      if (!supported) return;
+      if (!unlocked) {
+        // Queue it — will be spoken on next user gesture
+        pendingQueue.push(text);
+        if (pendingQueue.length > 3) pendingQueue.shift();
+        return;
+      }
+      doSpeak(text);
     }
   };
 })();
@@ -279,9 +305,9 @@ function speakText(text) {
   SpeechEngine.speak(text);
 }
 
-// Unlock speech on user interactions (click/touch/keydown)
-['click', 'touchstart', 'keydown'].forEach(evt => {
-  document.addEventListener(evt, () => SpeechEngine.unlock(), { once: true });
+// Unlock speech on EVERY user interaction (mobile browsers need repeated unlocks)
+['click', 'touchstart', 'touchend', 'keydown'].forEach(evt => {
+  document.addEventListener(evt, () => SpeechEngine.unlock(), { capture: true });
 });
 
 // Listen for card sound events from server
@@ -484,6 +510,8 @@ const screens = { lobby: $('#lobby'), waiting: $('#waiting'), heroSelect: $('#he
 function showScreen(name) {
   Object.values(screens).forEach(s => s.classList.remove('active'));
   screens[name].classList.add('active');
+  if (name === 'lobby') startRoomListPolling();
+  else stopRoomListPolling();
 }
 
 // ====== TOAST ======
@@ -526,8 +554,8 @@ $('#btnJoin').onclick = () => {
   socket.emit('joinRoom', { roomId: code, playerName: name, adminKey: getAdminKey() });
 };
 $('#btnStart').onclick = () => socket.emit('startGame');
-$('#btnEndTurn').onclick = () => { socket.emit('endTurn'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; fanjianTargeting = false; qixiMode = false; qixiCardId = null; };
-$('#btnForceSkip').onclick = () => { socket.emit('forceSkip'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; fanjianTargeting = false; qixiMode = false; qixiCardId = null; };
+$('#btnEndTurn').onclick = () => { socket.emit('endTurn'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; fanjianTargeting = false; fanjianCardId = null; qixiMode = false; qixiCardId = null; };
+$('#btnForceSkip').onclick = () => { socket.emit('forceSkip'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; fanjianTargeting = false; fanjianCardId = null; qixiMode = false; qixiCardId = null; };
 $('#btnRespond').onclick = () => { socket.emit('playCard', {}); selectedCardId = null; };
 $('#btnBackLobby').onclick = () => {
   state = null;
@@ -541,11 +569,13 @@ $('#btnBackLobby').onclick = () => {
   selectTargetFor = null;
   lordSkillTargeting = false;
   fanjianTargeting = false;
+  fanjianCardId = null;
   qixiMode = false;
   qixiCardId = null;
   const restartBtn = document.getElementById('btnRestart');
   if (restartBtn) restartBtn.remove();
   showScreen('lobby');
+  refreshRoomList();
 };
 $('#btnSkill').onclick = () => {
   if (!state) return;
@@ -573,9 +603,10 @@ $('#btnHujia').onclick = () => {
 };
 $('#btnFanjian').onclick = () => {
   if (!state) return;
+  // Step 1: select a card first, then target
   fanjianTargeting = true;
-  selectingTarget = true;
-  selectTargetFor = null;
+  fanjianCardId = null; // reset — need to pick card first
+  selectingTarget = false;
   selectedCardId = null;
   renderGame();
 };
@@ -634,8 +665,83 @@ socket.on('roomJoined', ({ roomId }) => {
   $('#displayRoomCode').textContent = roomId;
   showScreen('waiting');
 });
+socket.on('spectateJoined', ({ roomId }) => {
+  showScreen('gameBoard');
+});
 socket.on('error', msg => showToast(msg));
 socket.on('log', msg => {}); // handled in gameState
+
+// ====== ROOM LIST ======
+socket.on('roomList', (list) => {
+  const container = $('#roomList');
+  if (!list || list.length === 0) {
+    container.innerHTML = '<div class="room-list-empty">暂无房间</div>';
+    return;
+  }
+  const stateLabels = { waiting: '等待中', hero_select: '选将中', playing: '游戏中', finished: '已结束' };
+  const stateClasses = { waiting: 'state-waiting', hero_select: 'state-playing', playing: 'state-playing', finished: 'state-finished' };
+  container.innerHTML = list.map(r => {
+    const stateLabel = stateLabels[r.state] || r.state;
+    const stateCls = stateClasses[r.state] || '';
+    const canJoin = r.state === 'waiting';
+    const canSpectate = r.state === 'playing' || r.state === 'hero_select';
+    const names = r.playerNames.join(', ');
+    const specInfo = r.spectatorCount > 0 ? ` · ${r.spectatorCount}人观战` : '';
+    let actionBtn = '';
+    if (canJoin) {
+      actionBtn = `<button class="btn btn-room-join" data-room="${r.roomId}">加入</button>`;
+    } else if (canSpectate) {
+      actionBtn = `<button class="btn btn-room-spectate" data-room="${r.roomId}">观战</button>`;
+    }
+    return `<div class="room-list-item">
+      <div class="room-list-info">
+        <span class="room-list-id">房间 ${r.roomId}</span>
+        <span class="room-list-state ${stateCls}">${stateLabel}</span>
+        <span class="room-list-count">${r.playerCount}人${specInfo}</span>
+      </div>
+      <div class="room-list-names">${names}</div>
+      ${actionBtn}
+    </div>`;
+  }).join('');
+  // Bind buttons
+  container.querySelectorAll('.btn-room-join').forEach(btn => {
+    btn.onclick = () => {
+      const name = $('#playerName').value.trim() || '无名侠';
+      localStorage.setItem('sgz_playerName', name);
+      socket.emit('joinRoom', { roomId: btn.dataset.room, playerName: name, adminKey: getAdminKey() });
+    };
+  });
+  container.querySelectorAll('.btn-room-spectate').forEach(btn => {
+    btn.onclick = () => {
+      const name = $('#playerName').value.trim() || '观众';
+      localStorage.setItem('sgz_playerName', name);
+      socket.emit('spectateRoom', { roomId: btn.dataset.room, playerName: name });
+    };
+  });
+});
+
+function refreshRoomList() {
+  socket.emit('listRooms');
+}
+
+$('#btnRefreshRooms').onclick = refreshRoomList;
+
+// Auto-refresh room list when on lobby screen
+let roomListTimer = null;
+function startRoomListPolling() {
+  stopRoomListPolling();
+  refreshRoomList();
+  roomListTimer = setInterval(refreshRoomList, 5000);
+}
+function stopRoomListPolling() {
+  if (roomListTimer) { clearInterval(roomListTimer); roomListTimer = null; }
+}
+// Start polling on page load
+startRoomListPolling();
+// Also refresh when socket connects (initial emit may be lost if socket wasn't ready)
+socket.on('connect', () => {
+  refreshRoomList();
+});
 
 socket.on('gameState', (gs) => {
   const prevPa = state?.pendingAction;
@@ -665,8 +771,13 @@ function render() {
     showScreen('waiting');
     renderWaiting();
   } else if (state.state === 'hero_select') {
-    showScreen('heroSelect');
-    renderHeroSelect();
+    if (state.isSpectator) {
+      showScreen('gameBoard');
+      renderGame();
+    } else {
+      showScreen('heroSelect');
+      renderHeroSelect();
+    }
   } else if (state.state === 'playing') {
     showScreen('gameBoard');
     renderGame();
@@ -872,6 +983,8 @@ function renderGame() {
       }
     } else if (pa.type === 'guanshifu_select') {
       // Handled separately below, not a simple response
+    } else if (pa.type === 'qilin_choose') {
+      // Handled in chooseArea below
     } else if (pa.type === 'liuli_choice') {
       if (pa.daqiaoId === state.myId) {
         myPendingResponse = true;
@@ -941,8 +1054,9 @@ function renderGame() {
         lordSkillTargeting = false;
       } else if (fanjianTargeting) {
         // 反间 target selection
-        socket.emit('skillAction', { skillType: 'fanjian', targetId });
+        socket.emit('skillAction', { skillType: 'fanjian', targetId, cardId: fanjianCardId });
         fanjianTargeting = false;
+        fanjianCardId = null;
       } else if (qixiMode && qixiCardId) {
         // 奇袭 target selection
         socket.emit('skillAction', { skillType: 'qixi', cardId: qixiCardId, targetId });
@@ -990,10 +1104,17 @@ function renderGame() {
   } else if (qixiMode && qixiCardId && selectingTarget) {
     hintEl.textContent = '【奇袭】请选择一个目标角色';
   } else if (isMyTurn && !pa) {
-    hintEl.textContent = selectingTarget ? '请选择一个目标' : '你的回合 — 请出牌或结束回合';
+    if (fanjianTargeting && !fanjianCardId) {
+      hintEl.textContent = '【反间】请选择一张手牌展示给对方';
+    } else if (fanjianTargeting && fanjianCardId) {
+      hintEl.textContent = '【反间】请选择目标角色';
+    } else {
+      hintEl.textContent = selectingTarget ? '请选择一个目标' : '你的回合 — 请出牌或结束回合';
+    }
   } else {
     const cp = state.players[state.currentPlayerIdx];
-    hintEl.textContent = cp ? `等待 ${cp.name} 操作...` : '';
+    const prefix = state.isSpectator ? '【观战】' : '';
+    hintEl.textContent = cp ? `${prefix}等待 ${cp.name} 操作...` : '';
   }
 
   // ---- Action buttons ----
@@ -1066,6 +1187,20 @@ function renderGame() {
       socket.emit('playCard', {});
     };
     // Hide the default respond button for this case
+    $('#btnRespond').style.display = 'none';
+  } else if (pa?.type === 'qilin_choose' && pa.attackerId === state.myId) {
+    const targetP = state.players.find(p => p.id === pa.targetId);
+    const targetName = targetP?.name || '目标';
+    chooseArea.innerHTML =
+      `<span style="color:#ffd700;margin-right:8px;">麒麟弓：选择弃置${targetName}的哪匹马</span>` +
+      `<button class="btn btn-gold btn-qilin" data-horse="plusHorse">🐎+1马 ${pa.plusName}</button>` +
+      `<button class="btn btn-gold btn-qilin" data-horse="minusHorse">🐎-1马 ${pa.minusName}</button>`;
+    chooseArea.style.display = 'flex';
+    chooseArea.querySelectorAll('.btn-qilin').forEach(btn => {
+      btn.onclick = () => {
+        socket.emit('playCard', { horseSlot: btn.dataset.horse });
+      };
+    });
     $('#btnRespond').style.display = 'none';
   } else if (isGsfSelect) {
     // Show equipment selection for 贯石斧 (excluding weapon slot)
@@ -1187,14 +1322,14 @@ function renderGame() {
 
   // Skill button
   const skillHeroes = { liubei:'仁德', sunquan:'制衡', huanggai:'苦肉', huatuo:'青囊', diaochan:'离间', sunshangxiang:'结姻' };
-  const showSkill = isMyTurn && !pa && skillHeroes[me.hero];
+  const showSkill = me && isMyTurn && !pa && skillHeroes[me.hero];
   $('#btnSkill').style.display = showSkill ? '' : 'none';
   if (showSkill) {
     $('#btnSkill').textContent = skillHeroes[me.hero];
   }
 
   // Lord skill buttons
-  const isLord = me.role === 'lord';
+  const isLord = me?.role === 'lord';
   // 激将: Liu Bei Lord, during play phase, no pending action
   const showJijiang = isLord && me.hero === 'liubei' && isMyTurn && !pa;
   $('#btnJijiang').style.display = showJijiang ? '' : 'none';
@@ -1202,14 +1337,19 @@ function renderGame() {
   const showHujia = isLord && me.hero === 'caocao' && pa?.type === 'dodge' && pa.target === state.myId;
   $('#btnHujia').style.display = showHujia ? '' : 'none';
   // 反间: Zhou Yu, during play phase, no pending action, has hand cards
-  const showFanjian = me.hero === 'zhouyu' && isMyTurn && !pa && me.hand.length > 0;
+  const showFanjian = me && me.hero === 'zhouyu' && isMyTurn && !pa && me.hand.length > 0 && !state.turnFanjianUsed;
   $('#btnFanjian').style.display = showFanjian ? '' : 'none';
   // 奇袭: Gan Ning, during play phase, no pending action, has black hand cards
-  const hasBlackCard = me.hand.some(c => c.suit === '♠' || c.suit === '♣');
-  const showQixi = me.hero === 'ganning' && isMyTurn && !pa && hasBlackCard;
+  const hasBlackCard = me ? me.hand.some(c => c.suit === '♠' || c.suit === '♣') : false;
+  const showQixi = me && me.hero === 'ganning' && isMyTurn && !pa && hasBlackCard;
   $('#btnQixi').style.display = showQixi ? '' : 'none';
 
   // ---- Render my info ----
+  if (!me) {
+    // Spectator: hide my area
+    $('#myInfo').innerHTML = '<div class="spectator-notice">观战模式</div>';
+    $('#myHand').innerHTML = '';
+  } else {
   let myHpPips = '';
   for (let i = 0; i < me.maxHp; i++) {
     myHpPips += `<div class="my-hp-pip ${i < me.hp ? 'filled' : ''}"></div>`;
@@ -1270,6 +1410,15 @@ function renderGame() {
     el.onclick = () => {
       const cardId = parseInt(el.dataset.cid);
       const subtype = el.dataset.subtype;
+
+      // 反间 card selection: pick a card then enable target selection
+      if (fanjianTargeting && !fanjianCardId) {
+        fanjianCardId = cardId;
+        selectingTarget = true;
+        selectedCardId = cardId;
+        renderGame();
+        return;
+      }
 
       // Zhiheng phase: toggle selection
       if (isZhihengSelect) {
@@ -1339,6 +1488,7 @@ function renderGame() {
         selectTargetFor = null;
         lordSkillTargeting = false;
         fanjianTargeting = false;
+        fanjianCardId = null;
         qixiMode = false;
         qixiCardId = null;
         renderGame();
@@ -1359,6 +1509,7 @@ function renderGame() {
       selectedCardId = null;
     };
   });
+  } // end of if(me) else block
 }
 
 function renderGameOver() {
