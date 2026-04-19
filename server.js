@@ -166,6 +166,7 @@ function getPlayerView(room, playerId) {
       equipment: p.equipment,
       judgments: p.judgments || [],
       alive: p.alive,
+      disconnected: !!p.disconnected,
       kingdom: p.hero ? HEROES[p.hero]?.kingdom : null,
       skill: p.hero ? HEROES[p.hero]?.skill : null,
       skillDesc: p.hero ? HEROES[p.hero]?.skillDesc : null,
@@ -190,6 +191,7 @@ function getPlayerView(room, playerId) {
     turnWineUsed: room.turnWineUsed,
     heroSelectPhase: room.heroSelectPhase || null,
     heroChoices: room.heroChoices?.[playerId] || null,
+    isAdmin: !!(room.players.find(p => p.id === playerId)?.isAdmin),
   };
 }
 
@@ -909,6 +911,11 @@ function handlePlayCard(room, player, data) {
           const isRed = tieqiJudge.suit === '♥' || tieqiJudge.suit === '♦';
           if (isRed) {
             addLog(room, `马超【铁骑】判定 ${tieqiJudge.suit}${tieqiJudge.number} — 红色，此杀不可被闪抵消`);
+            // Armor still applies even under 铁骑
+            if (checkArmorBlock(room, player, target, card)) {
+              broadcastState(room);
+              return;
+            }
             let tieqiDmg = 1;
             if (room.turnWineUsed) { tieqiDmg = 2; room.turnWineUsed = false; }
             if (room.luoyiActive && player.hero === 'xuchu') tieqiDmg += 1;
@@ -922,6 +929,12 @@ function handlePlayCard(room, player, data) {
             addLog(room, `马超【铁骑】判定 ${tieqiJudge.suit}${tieqiJudge.number} — 黑色，无效`);
           }
         }
+      }
+
+      // Armor check BEFORE dodge phase (仁王盾, 藤甲, 八卦阵)
+      if (checkArmorBlock(room, player, target, card)) {
+        broadcastState(room);
+        break;
       }
 
       // Pending dodge (吕布 无双: need 2 dodges)
@@ -1281,40 +1294,39 @@ function handlePlayCard(room, player, data) {
   }
 }
 
-// Helper: apply attack damage after dodge failure (used by dodge handler and liuli decline)
-function applyAttackDamage(room, attacker, target, card, dodgesNeeded) {
-  // 青釭剑: ignore armor
+// Helper: check if armor blocks an attack BEFORE dodge phase. Returns true if blocked.
+function checkArmorBlock(room, attacker, target, card) {
   const ignoreArmor = attacker.equipment.weapon?.name === '青釭剑';
   if (ignoreArmor) {
     addLog(room, `青釭剑发动：无视目标防具`);
+    return false;
   }
-  // 八卦阵 check
-  if (!ignoreArmor && target.equipment.armor?.name === '八卦阵') {
+  // 仁王盾: blocks black 杀 (check first — deterministic block)
+  if (target.equipment.armor?.name === '仁王盾' && card && (card.suit === '♠' || card.suit === '♣')) {
+    addLog(room, `仁王盾挡住了黑色【杀】`);
+    return true;
+  }
+  // 藤甲: blocks non-fire (non-♥) 杀
+  if (target.equipment.armor?.name === '藤甲' && card && card.suit !== '♥') {
+    addLog(room, `藤甲抵消了非火属性【杀】`);
+    return true;
+  }
+  // 八卦阵: judgment
+  if (target.equipment.armor?.name === '八卦阵') {
     const judge = Math.random() < 0.5;
     if (judge) {
       addLog(room, `八卦阵判定成功！${target.name} 回避了攻击`);
-      room.pendingAction = null;
-      broadcastState(room);
-      return;
+      return true;
     } else {
       addLog(room, `八卦阵判定失败`);
     }
   }
-  // 仁王盾: blocks black 杀
-  if (!ignoreArmor && target.equipment.armor?.name === '仁王盾' && card && (card.suit === '♠' || card.suit === '♣')) {
-    addLog(room, `仁王盾挡住了黑色【杀】`);
-    room.pendingAction = null;
-    broadcastState(room);
-    return;
-  }
-  // 藤甲: blocks non-fire (non-♥) 杀
-  if (!ignoreArmor && target.equipment.armor?.name === '藤甲' && card && card.suit !== '♥') {
-    addLog(room, `藤甲抵消了非火属性【杀】`);
-    room.pendingAction = null;
-    broadcastState(room);
-    return;
-  }
+  return false;
+}
 
+// Helper: apply attack damage after dodge failure (used by dodge handler and liuli decline)
+function applyAttackDamage(room, attacker, target, card, dodgesNeeded) {
+  const ignoreArmor = attacker.equipment.weapon?.name === '青釭剑';
   let damage = 1;
   if (room.turnWineUsed) {
     damage = 2;
@@ -2048,13 +2060,16 @@ function handleResponse(room, player, data) {
 
 // ============== SOCKET HANDLING ==============
 
+const ADMIN_PASSWORD = 'yzl2026';
+
 io.on('connection', (socket) => {
   let currentRoom = null;
   let currentPlayer = null;
 
-  socket.on('createRoom', ({ playerName }) => {
+  socket.on('createRoom', ({ playerName, adminKey }) => {
     const roomId = String(Math.floor(Math.random() * 90 + 10));
     const room = createRoom(roomId);
+    const isAdmin = adminKey === ADMIN_PASSWORD;
     const player = {
       id: socket.id,
       socketId: socket.id,
@@ -2067,6 +2082,7 @@ io.on('connection', (socket) => {
       equipment: { weapon: null, armor: null, plusHorse: null, minusHorse: null },
       judgments: [],
       alive: true,
+      isAdmin: isAdmin,
     };
     room.players.push(player);
     room.hostId = socket.id;
@@ -2075,14 +2091,16 @@ io.on('connection', (socket) => {
     currentRoom = room;
     currentPlayer = player;
     socket.emit('roomCreated', { roomId });
+    if (isAdmin) addLog(room, `管理员 ${player.name} 已进入房间`);
     broadcastState(room);
   });
 
-  socket.on('joinRoom', ({ roomId, playerName }) => {
+  socket.on('joinRoom', ({ roomId, playerName, adminKey }) => {
     const room = rooms.get(roomId);
     if (!room) { socket.emit('error', '房间不存在'); return; }
     if (room.state !== 'waiting') { socket.emit('error', '游戏已开始'); return; }
     if (room.players.length >= 8) { socket.emit('error', '房间已满（最多8人）'); return; }
+    const isAdmin = adminKey === ADMIN_PASSWORD;
     const player = {
       id: socket.id,
       socketId: socket.id,
@@ -2095,6 +2113,7 @@ io.on('connection', (socket) => {
       equipment: { weapon: null, armor: null, plusHorse: null, minusHorse: null },
       judgments: [],
       alive: true,
+      isAdmin: isAdmin,
     };
     room.players.push(player);
     socket.join(roomId);
@@ -2212,24 +2231,17 @@ io.on('connection', (socket) => {
     endCurrentTurn(currentRoom);
   });
 
-  // ====== Force Skip — escape any stuck pendingAction ======
+  // ====== Force Skip — admin only: escape any stuck pendingAction ======
   socket.on('forceSkip', () => {
     if (!currentRoom || currentRoom.state !== 'playing') return;
+    if (!currentPlayer || !currentPlayer.isAdmin) {
+      socket.emit('error', '只有管理员可以执行跳过操作');
+      return;
+    }
     const pa = currentRoom.pendingAction;
     if (!pa) return;
 
-    // Verify the requesting player is involved in the current pendingAction
-    const pid = socket.id;
-    const isCurrentTurnPlayer = currentRoom.players[currentRoom.currentPlayerIdx]?.id === pid;
-    const isInvolved = isCurrentTurnPlayer ||
-      pa.source === pid || pa.playerId === pid || pa.targetId === pid ||
-      pa.target === pid || pa.attackerId === pid || pa.daqiaoId === pid ||
-      (pa.askOrder && pa.askOrder[pa.currentAskerIdx] === pid) ||
-      (pa.players && pa.players[pa.currentIdx] === pid);
-
-    if (!isInvolved) return;
-
-    addLog(currentRoom, `${currentPlayer.name} 选择跳过当前操作`);
+    addLog(currentRoom, `⚡ 管理员 ${currentPlayer.name} 强制跳过当前操作 [${pa.type}]`);
 
     // Handle each pendingAction type gracefully
     switch (pa.type) {
@@ -2683,20 +2695,86 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ====== 再来一局 ======
+  socket.on('restartGame', () => {
+    if (!currentRoom || currentRoom.state !== 'finished') return;
+    if (socket.id !== currentRoom.hostId) {
+      socket.emit('error', '只有房主可以开始新一局');
+      return;
+    }
+    // Remove disconnected players
+    currentRoom.players = currentRoom.players.filter(p => !p.disconnected);
+    if (currentRoom.players.length < 2) {
+      socket.emit('error', '至少需要2名玩家才能开始');
+      return;
+    }
+    // Reset room state
+    currentRoom.state = 'waiting';
+    currentRoom.deck = [];
+    currentRoom.discard = [];
+    currentRoom.currentPlayerIdx = 0;
+    currentRoom.turnPhase = null;
+    currentRoom.pendingAction = null;
+    currentRoom.turnAttackCount = 0;
+    currentRoom.turnWineUsed = false;
+    currentRoom.luoyiActive = false;
+    currentRoom.log = [];
+    currentRoom.heroSelectPhase = null;
+    currentRoom.heroPool = null;
+    currentRoom.heroChoices = {};
+    // Reset all players
+    currentRoom.players.forEach(p => {
+      p.hero = null;
+      p.hp = 0;
+      p.maxHp = 0;
+      p.role = null;
+      p.hand = [];
+      p.equipment = { weapon: null, armor: null, plusHorse: null, minusHorse: null };
+      p.judgments = [];
+      p.alive = true;
+    });
+    addLog(currentRoom, '房主开始了新一局');
+    broadcastState(currentRoom);
+  });
+
   socket.on('disconnect', () => {
     if (currentRoom && currentPlayer) {
+      const wasAlive = currentPlayer.alive;
       currentPlayer.alive = false;
+      currentPlayer.disconnected = true;
       addLog(currentRoom, `${currentPlayer.name} 断开连接`);
       // Remove from waiting room
       if (currentRoom.state === 'waiting') {
         currentRoom.players = currentRoom.players.filter(p => p.id !== currentPlayer.id);
+        // If host left, assign new host
+        if (currentRoom.hostId === currentPlayer.id && currentRoom.players.length > 0) {
+          currentRoom.hostId = currentRoom.players[0].id;
+        }
       }
-      if (currentRoom.players.filter(p => p.alive).length <= 1 && currentRoom.state === 'playing') {
-        currentRoom.state = 'finished';
-        addLog(currentRoom, '游戏因玩家断开而结束');
+      // Only check game end if the player was alive when they disconnected
+      if (wasAlive && currentRoom.state === 'playing') {
+        // Check if it's this player's turn or they have a pending action
+        if (currentRoom.players[currentRoom.currentPlayerIdx]?.id === currentPlayer.id) {
+          currentRoom.pendingAction = null;
+          nextTurn(currentRoom);
+        } else if (currentRoom.pendingAction) {
+          // If the disconnected player was supposed to respond, treat as skip
+          const pa = currentRoom.pendingAction;
+          const isResponder =
+            pa.target === currentPlayer.id ||
+            pa.playerId === currentPlayer.id ||
+            (pa.attackerId === currentPlayer.id) ||
+            (pa.daqiaoId === currentPlayer.id);
+          if (isResponder) {
+            currentRoom.pendingAction = null;
+          }
+        }
+        checkWinCondition(currentRoom);
       }
       broadcastState(currentRoom);
-      if (currentRoom.players.length === 0) {
+      // Only delete room if ALL players disconnected
+      const connected = currentRoom.players.filter(p => !p.disconnected);
+      if (connected.length === 0) {
         rooms.delete(currentRoom.id);
       }
     }

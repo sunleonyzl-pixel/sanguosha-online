@@ -164,6 +164,33 @@ input[type="text"]:focus {
   box-shadow: 0 0 0 3px rgba(218,165,32,0.12);
 }
 input[type="text"]::placeholder { color: #c0b8a8; }
+input[type="password"] {
+  width: 100%;
+  padding: 10px 14px;
+  background: #fff;
+  border: 1.5px solid var(--parchment-dark);
+  border-radius: 8px;
+  color: var(--ink);
+  font-family: 'Noto Serif SC', serif;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+input[type="password"]:focus {
+  border-color: var(--gold-light);
+  box-shadow: 0 0 0 3px rgba(218,165,32,0.12);
+}
+input[type="password"]::placeholder { color: #c0b8a8; }
+.admin-key-group { margin-bottom: 12px !important; }
+.admin-key-toggle {
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px !important;
+  opacity: 0.5;
+  letter-spacing: 2px !important;
+  transition: opacity 0.2s;
+}
+.admin-key-toggle:hover { opacity: 0.8; }
 
 .lobby-actions { display:flex; flex-direction:column; align-items:center; gap:18px; }
 .divider-text { color: var(--wood); opacity:0.4; font-size:12px; letter-spacing:6px; }
@@ -400,6 +427,16 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   grid-template-columns: repeat(5, 1fr);
   gap: 14px;
 }
+.hero-card {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  box-shadow: 0 3px 12px rgba(100,70,30,0.12);
+  border: 2px solid transparent;
+  background: var(--parchment);
+}
 .hero-card::before {
   content: '';
   position: absolute; top: 0; left: 0; right: 0;
@@ -407,14 +444,34 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   background: linear-gradient(90deg, transparent, var(--gold-warm), transparent);
   opacity: 0;
   transition: opacity 0.3s;
+  z-index: 2;
 }
 .hero-card:hover {
   border-color: var(--gold-light);
-  transform: translateY(-6px);
-  box-shadow: 0 8px 30px rgba(100,70,30,0.12), 0 0 0 2px rgba(218,165,32,0.1);
+  transform: translateY(-6px) scale(1.02);
+  box-shadow: 0 12px 36px rgba(100,70,30,0.18), 0 0 0 2px rgba(218,165,32,0.15);
 }
 .hero-card:hover::before { opacity: 1; }
 .hero-card.taken { opacity: 0.2; pointer-events: none; filter: grayscale(0.5); }
+.hero-card-img {
+  width: 100%;
+  aspect-ratio: 420 / 572;
+  overflow: hidden;
+}
+.hero-card-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.35s;
+}
+.hero-card:hover .hero-card-img img {
+  transform: scale(1.05);
+}
+.hero-card-info {
+  padding: 10px 12px 12px;
+  background: linear-gradient(to bottom, var(--parchment), #f6efe0);
+}
 .hero-select-wait {
   grid-column: 1 / -1;
   text-align: center;
@@ -430,45 +487,30 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   50% { opacity: 0.5; text-shadow: none; }
 }
 
-.hero-portrait {
-  width: 72px; height: 72px;
-  margin: 0 auto 14px;
-  border-radius: 50%;
-  border: 2.5px solid rgba(218,165,32,0.4);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 32px;
-  background: transparent;
-  box-shadow: 0 3px 12px rgba(100,70,30,0.12);
-  overflow: hidden;
-}
-.hero-portrait svg {
-  width: 100%; height: 100%;
-}
-}
 .hero-name {
   font-family: 'Ma Shan Zheng', cursive;
-  font-size: 22px;
+  font-size: 20px;
   color: var(--ink);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .hero-kingdom {
   font-size: 11px;
   color: var(--wood);
   opacity: 0.6;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   letter-spacing: 2px;
 }
 .hero-stats {
   font-size: 12px;
   color: var(--red);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   font-weight: 600;
 }
 .hero-skill-name {
   font-size: 13px;
   color: var(--jade);
   font-weight: 700;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 .hero-skill-desc {
   font-size: 11px;
@@ -630,6 +672,17 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   border: 1px solid rgba(212,145,42,0.15);
   font-weight: 600;
 }
+.spectator-badge {
+  font-size: 10px;
+  background: rgba(120,120,120,0.15);
+  color: #888;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 6px;
+  border: 1px solid rgba(120,120,120,0.2);
+  font-weight: 600;
+  letter-spacing: 1px;
+}
 
 /* Center area */
 .center-area {
@@ -770,28 +823,65 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   position: relative;
   display: flex;
   flex-direction: column;
-  padding: 7px 9px;
-  border: 1.5px solid transparent;
+  border: 1.5px solid rgba(0,0,0,0.15);
   user-select: none;
   box-shadow: 0 2px 8px rgba(100,70,30,0.12), 0 1px 2px rgba(0,0,0,0.06);
   overflow: hidden;
+  background: #f8f0e0;
+}
+.hand-card .card-art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+.hand-card .card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 7px;
+}
+.hand-card .card-header {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  background: linear-gradient(transparent, rgba(0,0,0,0.65));
+  border-radius: 0 0 7px 7px;
+}
+.hand-card .card-suit-number {
+  font-size: 11px;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+.hand-card .card-suit-number.red { color: #ff6b6b; }
+.hand-card .card-suit-number.black { color: #ddd; }
+.hand-card .card-name-inline {
+  font-family: 'Ma Shan Zheng', cursive;
+  font-size: 13px;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+  white-space: nowrap;
 }
 .hand-card::after {
   content: '';
   position: absolute; inset: 0;
-  background: linear-gradient(170deg, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0.05) 30%, transparent 60%);
+  background: linear-gradient(170deg, rgba(255,255,255,0.15) 0%, transparent 40%);
   pointer-events: none;
-  border-radius: 8px;
+  border-radius: 7px;
+  z-index: 1;
 }
 .hand-card:hover {
   transform: translateY(-12px) scale(1.04);
   z-index: 10;
-  box-shadow: 0 14px 28px rgba(100,70,30,0.2), 0 4px 8px rgba(0,0,0,0.08);
+  box-shadow: 0 14px 28px rgba(100,70,30,0.25), 0 4px 8px rgba(0,0,0,0.1);
 }
 .hand-card.selected {
   transform: translateY(-16px) scale(1.05);
   border-color: var(--gold-light) !important;
-  box-shadow: 0 0 0 2px rgba(218,165,32,0.3), 0 14px 28px rgba(100,70,30,0.18);
+  box-shadow: 0 0 0 3px rgba(218,165,32,0.4), 0 14px 28px rgba(100,70,30,0.2);
 }
 .hand-card.discard-selected {
   transform: translateY(-14px);
@@ -799,47 +889,10 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   box-shadow: 0 0 0 2px rgba(231,76,60,0.3), 0 0 16px rgba(231,76,60,0.12);
   opacity: 0.7;
 }
-.hand-card.card-basic {
-  background: linear-gradient(175deg, #fefcf8 0%, #f8f0e0 40%, #f0e6d2 100%);
-  border-color: var(--parchment-dark);
-}
-.hand-card.card-trick {
-  background: linear-gradient(175deg, #f5fcf7 0%, #e6f5ec 40%, #d4edde 100%);
-  border-color: rgba(39,174,96,0.3);
-}
-.hand-card.card-equipment {
-  background: linear-gradient(175deg, #f2f7fc 0%, #e0ecf7 40%, #d0e2f0 100%);
-  border-color: rgba(41,128,185,0.3);
-}
-
-.card-suit-number {
-  font-size: 12px;
-  font-weight: 700;
-}
-.card-suit-number.red { color: var(--red); }
-.card-suit-number.black { color: #444; }
-
-.card-name {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: 'Ma Shan Zheng', cursive;
-  font-size: 19px;
-  text-align: center;
-  line-height: 1.1;
-}
-.hand-card.card-basic .card-name { color: var(--ink); }
-.hand-card.card-trick .card-name { color: #1e8449; }
-.hand-card.card-equipment .card-name { color: #2471a3; }
-
-.card-type-label {
-  font-size: 9px;
-  text-align: center;
-  opacity: 0.45;
-  letter-spacing: 2px;
-  color: var(--wood);
-}
+/* Fallback colors when no image */
+.hand-card.card-basic { border-color: var(--parchment-dark); }
+.hand-card.card-trick { border-color: rgba(39,174,96,0.3); }
+.hand-card.card-equipment { border-color: rgba(41,128,185,0.3); }
 
 /* ====== GAME OVER ====== */
 #gameOver { background: rgba(245,237,224,0.97); }
@@ -878,6 +931,16 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   color: var(--ink);
 }
 .final-role-entry:hover { background: rgba(218,165,32,0.1); }
+.final-role-entry.disconnected {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+.gameover-panel .btn-gold {
+  margin-bottom: 10px;
+}
+.gameover-panel .btn + .btn {
+  margin-left: 0;
+}
 
 /* ====== LOW HEALTH WARNING ====== */
 .opponent-card.low-hp {
@@ -902,6 +965,83 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   margin-top: 5px;
   padding: 2px 0;
   border-top: 1px dashed rgba(39,174,96,0.12);
+}
+
+/* ====== CLICKABLE EQUIPMENT & HERO ====== */
+.equip-clickable {
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+  transition: background 0.2s, color 0.2s;
+  white-space: nowrap;
+  margin-right: 4px;
+}
+.equip-clickable:hover {
+  background: rgba(39,174,96,0.12);
+  color: var(--jade);
+}
+.hero-clickable {
+  cursor: pointer;
+  display: inline-block;
+  border-radius: 50%;
+  transition: box-shadow 0.2s, transform 0.15s;
+}
+.hero-clickable:hover {
+  box-shadow: 0 0 8px rgba(218,165,32,0.4);
+  transform: scale(1.08);
+}
+
+/* Info Popup */
+#infoPopup {
+  position: fixed;
+  z-index: 9999;
+  background: linear-gradient(135deg, #fffdf5 0%, #faf5e8 100%);
+  border: 1.5px solid var(--gold-light);
+  border-radius: 10px;
+  padding: 0;
+  max-width: 340px;
+  min-width: 180px;
+  box-shadow: 0 8px 32px rgba(100,70,20,0.18), 0 1px 4px rgba(0,0,0,0.06);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.2s, transform 0.2s;
+  pointer-events: auto;
+  font-family: 'Noto Serif SC', serif;
+  display: flex;
+  overflow: hidden;
+}
+.info-popup-img {
+  width: 120px;
+  min-height: 100px;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: #e8e0d0;
+}
+.info-popup-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.info-popup-text {
+  padding: 14px 16px;
+  flex: 1;
+  min-width: 0;
+}
+.info-popup-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--red);
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(218,165,32,0.2);
+  font-family: 'Ma Shan Zheng', cursive;
+  letter-spacing: 1px;
+}
+.info-popup-body {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink);
 }
 .opp-judge, .my-judge {
   font-size: 10px;
@@ -939,16 +1079,6 @@ input[type="text"]::placeholder { color: #c0b8a8; }
 
 /* ====== HERO CARD ENTRANCE ====== */
 .hero-card {
-  background: #fff;
-  border: 1.5px solid var(--parchment-dark);
-  border-radius: var(--radius);
-  padding: 18px 14px;
-  cursor: pointer;
-  transition: all 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  text-align: center;
-  position: relative;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(100,70,30,0.06);
   animation: heroCardIn 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
 }
 @keyframes heroCardIn {
@@ -990,7 +1120,7 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   .opponent-card { min-width: 135px; max-width: 180px; padding: 8px 12px; }
   .my-hand { gap: 4px; }
   .hand-card { --card-w: 74px; --card-h: 108px; }
-  .hand-card .card-name { font-size: 16px; }
+  .hand-card .card-name-inline { font-size: 11px; }
   .waiting-panel { padding: 32px 28px; min-width: 320px; }
   .action-buttons { flex-wrap: wrap; justify-content: center; }
   .btn { padding: 10px 20px; font-size: 13px; }
@@ -1021,8 +1151,7 @@ input[type="text"]::placeholder { color: #c0b8a8; }
   .role-reveal { font-size: 14px; margin-bottom: 18px; }
   .role-reveal span { font-size: 17px; padding: 3px 14px; }
   .hero-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-  .hero-card { padding: 12px 10px; }
-  .hero-portrait { width: 52px; height: 52px; font-size: 24px; margin-bottom: 10px; }
+  .hero-card-info { padding: 8px 10px; }
   .hero-name { font-size: 19px; }
   .hero-kingdom { font-size: 10px; }
   .hero-stats { font-size: 11px; margin-bottom: 6px; }
@@ -1095,7 +1224,7 @@ input[type="text"]::placeholder { color: #c0b8a8; }
     padding: 5px 6px; border-radius: 5px;
     flex-shrink: 0;
   }
-  .hand-card .card-name { font-size: 14px; }
+  .hand-card .card-name-inline { font-size: 10px; }
   .card-suit-number { font-size: 10px; }
   .card-type-label { font-size: 8px; }
   .hand-card:hover { transform: translateY(-5px); }

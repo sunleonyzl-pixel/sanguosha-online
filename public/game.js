@@ -1,5 +1,5 @@
 // ====== GAME CLIENT ======
-const socket = io();
+const socket = io({ transports: ['polling', 'websocket'] });
 
 let state = null;
 let selectedCardId = null;
@@ -293,7 +293,7 @@ socket.on('cardSound', (text) => {
 
 // ====== HERO DATA (client side) ======
 
-// Kingdom color schemes for SVG portraits
+// Kingdom color schemes for portraits
 const KINGDOM_COLORS = {
   '蜀': { bg: '#b8342a', ring: '#e8534a', text: '#fff' },
   '魏': { bg: '#2a5fa8', ring: '#4a8ae8', text: '#fff' },
@@ -306,48 +306,56 @@ const HERO_KINGDOM_MAP = {
   sunquan:'吴', ganning:'吴', lvmeng:'吴', huanggai:'吴', zhouyu:'吴', daqiao:'吴', luxun:'吴', sunshangxiang:'吴',
   lvbu:'群', huatuo:'群', diaochan:'群', huaxiong:'群',
 };
-const HERO_CHAR = {
-  liubei:'备', guanyu:'羽', zhangfei:'飞', zhugeliang:'亮', zhaoyun:'云',
-  machao:'超', huangyueying:'英',
-  caocao:'操', simayi:'懿', xiaohoudun:'惇', zhangliao:'辽', xuchu:'褚',
-  guojia:'嘉', zhenji:'姬',
-  sunquan:'权', ganning:'宁', lvmeng:'蒙', huanggai:'盖', zhouyu:'瑜',
-  daqiao:'乔', luxun:'逊', sunshangxiang:'香',
-  lvbu:'布', huatuo:'佗', diaochan:'蝉', huaxiong:'雄',
+
+// ====== IMAGE PATHS ======
+const CARD_IMG = {
+  // basic
+  attack: 'img/cards/sha.png', dodge: 'img/cards/shan.png',
+  peach: 'img/cards/tao.png', wine: 'img/cards/jiu.png',
+  // tricks
+  duel: 'img/cards/juedou.png', barbarian: 'img/cards/nanman.png',
+  arrow: 'img/cards/wanjian.png', draw2: 'img/cards/wuzhong.png',
+  dismantle: 'img/cards/guohe.png', snatch: 'img/cards/shunshou.png',
+  peachgarden: 'img/cards/taoyuan.png', indulgence: 'img/cards/lebusishu.png',
+  famine: 'img/cards/bingliang.png', lightning: 'img/cards/shandian.png',
+  nullify: 'img/cards/wuxie.png',
+};
+const EQUIP_IMG = {
+  '诸葛连弩':'img/cards/zhugenu.png', '青龙偃月刀':'img/cards/qinglong.png',
+  '丈八蛇矛':'img/cards/zhangba.png', '雌雄双股剑':'img/cards/cixiong.png',
+  '青釭剑':'img/cards/qinggang.png', '寒冰剑':'img/cards/hanbing.png',
+  '古锭刀':'img/cards/guding.png', '贯石斧':'img/cards/guanshi.png',
+  '方天画戟':'img/cards/fangtian.png', '朱雀羽扇':'img/cards/zhuque.png',
+  '麒麟弓':'img/cards/qilin.png',
+  '八卦阵':'img/cards/bagua.png', '仁王盾':'img/cards/renwang.png',
+  '藤甲':'img/cards/tengjia.png', '白银狮子':'img/cards/bayin.png',
+  '的卢':'img/cards/dilu.png', '绝影':'img/cards/jueying.png',
+  '爪黄飞电':'img/cards/zhuahuang.png',
+  '赤兔':'img/cards/chitu.png', '大宛':'img/cards/dawan.png',
+  '紫骍':'img/cards/zixing.png',
+};
+const ROLE_IMG = {
+  lord:'img/roles/lord.png', loyalist:'img/roles/loyalist.png',
+  rebel:'img/roles/rebel.png', spy:'img/roles/spy.png',
 };
 
+function getCardImg(card) {
+  if (card.type === 'equipment') return EQUIP_IMG[card.name] || CARD_IMG[card.subtype] || '';
+  return CARD_IMG[card.subtype] || '';
+}
+
+// Hero portrait as real image (with fallback to colored circle)
 function heroPortraitSVG(heroKey, size) {
-  const kingdom = HERO_KINGDOM_MAP[heroKey] || '群';
-  const colors = KINGDOM_COLORS[kingdom];
-  const ch = HERO_CHAR[heroKey] || '?';
   const s = size || 48;
-  const half = s / 2;
-  const fontSize = Math.round(s * 0.5);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">
-    <defs>
-      <radialGradient id="g_${heroKey}" cx="40%" cy="35%" r="60%">
-        <stop offset="0%" stop-color="${colors.ring}"/>
-        <stop offset="100%" stop-color="${colors.bg}"/>
-      </radialGradient>
-    </defs>
-    <circle cx="${half}" cy="${half}" r="${half-1}" fill="url(#g_${heroKey})" stroke="${colors.ring}" stroke-width="1.5"/>
-    <text x="${half}" y="${half}" text-anchor="middle" dominant-baseline="central"
-      font-family="'Ma Shan Zheng','STKaiti','KaiTi',serif" font-size="${fontSize}" fill="${colors.text}"
-      style="text-shadow:0 1px 2px rgba(0,0,0,0.3)">${ch}</text>
-  </svg>`;
+  const src = `img/heroes/${heroKey}.png`;
+  return `<img src="${src}" alt="${heroKey}" style="width:${s}px;height:${s}px;object-fit:cover;border-radius:50%;" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span style="display:none;width:${s}px;height:${s}px;line-height:${s}px;text-align:center;border-radius:50%;background:${(KINGDOM_COLORS[HERO_KINGDOM_MAP[heroKey]]||KINGDOM_COLORS['群']).bg};color:#fff;font-size:${Math.round(s*0.45)}px;font-family:'Ma Shan Zheng',serif">${HERO_NAMES[heroKey]?.[0]||'?'}</span>`;
 }
 
 const HERO_PORTRAITS = {};
-Object.keys(HERO_CHAR).forEach(k => { HERO_PORTRAITS[k] = heroPortraitSVG(k, 48); });
+Object.keys(HERO_NAMES).forEach(k => { HERO_PORTRAITS[k] = heroPortraitSVG(k, 48); });
 
-// Smaller version for opponent panels
-function heroPortraitSmall(heroKey) {
-  return heroPortraitSVG(heroKey, 36);
-}
-// Larger version for hero selection
-function heroPortraitLarge(heroKey) {
-  return heroPortraitSVG(heroKey, 72);
-}
+function heroPortraitSmall(heroKey) { return heroPortraitSVG(heroKey, 36); }
+function heroPortraitLarge(heroKey) { return heroPortraitSVG(heroKey, 72); }
 
 const HERO_NAMES = {
   liubei:'刘备', guanyu:'关羽', zhangfei:'张飞', zhugeliang:'诸葛亮', zhaoyun:'赵云',
@@ -362,6 +370,108 @@ const ROLE_NAMES = { lord:'主公', loyalist:'忠臣', rebel:'反贼', spy:'内�
 const ROLE_CLASS = { lord:'role-lord', loyalist:'role-loyalist', rebel:'role-rebel', spy:'role-spy' };
 
 const NEEDS_TARGET = ['attack','duel','dismantle','snatch','indulgence','famine'];
+
+// ====== EQUIPMENT DESCRIPTIONS ======
+const EQUIP_DESC = {
+  '诸葛连弩': '攻击范围1｜出牌阶段，你使用【杀】无次数限制',
+  '青龙偃月刀': '攻击范围3｜当你使用的【杀】被目标角色的【闪】抵消时，你可以对其再使用一张【杀】',
+  '丈八蛇矛': '攻击范围3｜你可以将两张手牌当【杀】使用或打出',
+  '雌雄双股剑': '攻击范围2｜当你使用【杀】指定异性角色为目标后，其须弃一张手牌或你摸一张牌',
+  '青釭剑': '攻击范围2｜锁定技，当你使用【杀】时，无视目标角色的防具',
+  '寒冰剑': '攻击范围2｜当你使用【杀】造成伤害时，可防止此伤害并依次弃置目标两张牌',
+  '古锭刀': '攻击范围2｜锁定技，当你使用【杀】对目标造成伤害时，若其无手牌，此伤害+1',
+  '贯石斧': '攻击范围3｜当你使用的【杀】被【闪】抵消时，你可以弃置两张牌使此【杀】强制命中',
+  '方天画戟': '攻击范围4｜锁定技，你使用最后一张手牌【杀】时，可额外指定至多两个目标',
+  '朱雀羽扇': '攻击范围4｜你可以将普通【杀】当火【杀】使用',
+  '麒麟弓': '攻击范围5｜当你使用【杀】对目标造成伤害时，你可以弃置其装备区的一匹马',
+  '八卦阵': '防具｜当你需要使用或打出【闪】时，你可以进行判定：若为红色，视为你使用了【闪】',
+  '仁王盾': '防具｜锁定技，黑色【杀】对你无效',
+  '藤甲': '防具｜锁定技，【南蛮入侵】【万箭齐发】和非火属性【杀】对你无效；火焰伤害+1',
+  '白银狮子': '防具｜锁定技，当你受到伤害时，若伤害>1则改为1；失去装备区的此牌时回复1血',
+  '的卢': '+1马｜锁定技，其他角色与你的距离+1',
+  '绝影': '+1马｜锁定技，其他角色与你的距离+1',
+  '爪黄飞电': '+1马｜锁定技，其他角色与你的距离+1',
+  '赤兔': '-1马｜锁定技，你与其他角色的距离-1',
+  '大宛': '-1马｜锁定技，你与其他角色的距离-1',
+  '紫骍': '-1马｜锁定技，你与其他角色的距离-1',
+};
+
+// ====== INFO POPUP ======
+function showInfoPopup(title, content, event, imgSrc) {
+  // Remove existing
+  const old = document.getElementById('infoPopup');
+  if (old) old.remove();
+
+  const popup = document.createElement('div');
+  popup.id = 'infoPopup';
+  popup.innerHTML = `
+    ${imgSrc ? `<div class="info-popup-img"><img src="${imgSrc}" alt="" draggable="false"></div>` : ''}
+    <div class="info-popup-text">
+      <div class="info-popup-title">${title}</div>
+      <div class="info-popup-body">${content}</div>
+    </div>
+  `;
+  document.body.appendChild(popup);
+
+  // Position near click
+  const rect = popup.getBoundingClientRect();
+  let x = event.clientX;
+  let y = event.clientY - rect.height - 12;
+  if (y < 8) y = event.clientY + 16;
+  if (x + rect.width > window.innerWidth - 8) x = window.innerWidth - rect.width - 8;
+  if (x < 8) x = 8;
+  popup.style.left = x + 'px';
+  popup.style.top = y + 'px';
+  popup.style.opacity = '1';
+  popup.style.transform = 'translateY(0)';
+
+  // Close on any click elsewhere
+  function close(e) {
+    if (!popup.contains(e.target)) {
+      popup.remove();
+      document.removeEventListener('click', close, true);
+    }
+  }
+  setTimeout(() => document.addEventListener('click', close, true), 10);
+}
+
+function equipTag(icon, equipObj) {
+  if (!equipObj) return '';
+  const name = equipObj.name;
+  const desc = EQUIP_DESC[name] || '';
+  return `<span class="equip-clickable" data-equip-name="${name}" data-equip-desc="${desc.replace(/"/g,'&quot;')}">${icon} ${name}</span> `;
+}
+
+function heroClickTag(heroKey, size, playerName) {
+  const p = state?.players?.find(pp => pp.hero === heroKey && pp.name === playerName);
+  const skillName = p?.skill || '';
+  const skillDesc = p?.skillDesc || '';
+  return `<span class="hero-clickable" data-hero-key="${heroKey}" data-hero-skill="${skillName}" data-hero-desc="${(skillDesc||'').replace(/"/g,'&quot;')}">${size === 'small' ? heroPortraitSmall(heroKey) : heroPortraitSVG(heroKey, size)}</span>`;
+}
+
+// Global delegated click handler for info popups
+document.addEventListener('click', (e) => {
+  const equipEl = e.target.closest('.equip-clickable');
+  if (equipEl) {
+    e.stopPropagation();
+    const name = equipEl.dataset.equipName;
+    const desc = equipEl.dataset.equipDesc;
+    const img = EQUIP_IMG[name] || '';
+    showInfoPopup(`${name}`, desc || '无描述', e, img);
+    return;
+  }
+  const heroEl = e.target.closest('.hero-clickable');
+  if (heroEl) {
+    e.stopPropagation();
+    const skill = heroEl.dataset.heroSkill;
+    const desc = heroEl.dataset.heroDesc;
+    const heroKey = heroEl.dataset.heroKey;
+    const heroName = HERO_NAMES[heroKey] || heroKey;
+    const img = `img/heroes/${heroKey}.png`;
+    showInfoPopup(`${heroName}【${skill}】`, desc || '无描述', e, img);
+    return;
+  }
+});
 
 // ====== DOM REFS ======
 const $  = s => document.querySelector(s);
@@ -390,17 +500,29 @@ function showToast(msg) {
 const savedName = localStorage.getItem('sgz_playerName');
 if (savedName) $('#playerName').value = savedName;
 
+// Admin key toggle
+$('#adminToggle').onclick = () => {
+  const inp = $('#adminKey');
+  const visible = inp.style.display !== 'none';
+  inp.style.display = visible ? 'none' : '';
+  $('#adminToggle').textContent = visible ? '管理员 ▸' : '管理员 ▾';
+};
+
+function getAdminKey() {
+  return ($('#adminKey').value || '').trim();
+}
+
 $('#btnCreate').onclick = () => {
   const name = $('#playerName').value.trim() || '无名侠';
   localStorage.setItem('sgz_playerName', name);
-  socket.emit('createRoom', { playerName: name });
+  socket.emit('createRoom', { playerName: name, adminKey: getAdminKey() });
 };
 $('#btnJoin').onclick = () => {
   const name = $('#playerName').value.trim() || '无名侠';
   localStorage.setItem('sgz_playerName', name);
   const code = $('#roomCode').value.trim().toUpperCase();
   if (!code) { showToast('请输入房间号'); return; }
-  socket.emit('joinRoom', { roomId: code, playerName: name });
+  socket.emit('joinRoom', { roomId: code, playerName: name, adminKey: getAdminKey() });
 };
 $('#btnStart').onclick = () => socket.emit('startGame');
 $('#btnEndTurn').onclick = () => { socket.emit('endTurn'); selectedCardId = null; selectingTarget = false; lordSkillTargeting = false; fanjianTargeting = false; qixiMode = false; qixiCardId = null; };
@@ -420,6 +542,8 @@ $('#btnBackLobby').onclick = () => {
   fanjianTargeting = false;
   qixiMode = false;
   qixiCardId = null;
+  const restartBtn = document.getElementById('btnRestart');
+  if (restartBtn) restartBtn.remove();
   showScreen('lobby');
 };
 $('#btnSkill').onclick = () => {
@@ -638,12 +762,14 @@ function renderHeroSelect() {
 
   grid.innerHTML = heroes.map(h => {
     return `<div class="hero-card" data-hero="${h.key}">
-      <div class="hero-portrait">${heroPortraitLarge(h.key)}</div>
-      <div class="hero-name">${h.name}</div>
-      <div class="hero-kingdom">${h.kingdom}</div>
-      <div class="hero-stats">❤ ${h.hp}</div>
-      <div class="hero-skill-name">【${h.skill}】</div>
-      <div class="hero-skill-desc">${h.desc}</div>
+      <div class="hero-card-img"><img src="img/heroes/${h.key}.png" alt="${h.name}" onerror="this.style.display='none'"></div>
+      <div class="hero-card-info">
+        <div class="hero-name">${h.name}</div>
+        <div class="hero-kingdom">${h.kingdom}</div>
+        <div class="hero-stats">❤ ${h.hp}</div>
+        <div class="hero-skill-name">【${h.skill}】</div>
+        <div class="hero-skill-desc">${h.desc}</div>
+      </div>
     </div>`;
   }).join('');
 
@@ -774,10 +900,10 @@ function renderGame() {
       hpPips += `<div class="opp-hp-pip ${i < p.hp ? 'filled' : ''}"></div>`;
     }
     let equipStr = '';
-    if (p.equipment?.weapon) equipStr += `⚔ ${p.equipment.weapon.name} `;
-    if (p.equipment?.armor) equipStr += `🛡 ${p.equipment.armor.name} `;
-    if (p.equipment?.plusHorse) equipStr += `🐎+1 ${p.equipment.plusHorse.name} `;
-    if (p.equipment?.minusHorse) equipStr += `🐎-1 ${p.equipment.minusHorse.name} `;
+    equipStr += equipTag('⚔', p.equipment?.weapon);
+    equipStr += equipTag('🛡', p.equipment?.armor);
+    equipStr += equipTag('🐎+1', p.equipment?.plusHorse);
+    equipStr += equipTag('🐎-1', p.equipment?.minusHorse);
     let judgeStr = (p.judgments && p.judgments.length > 0) ? p.judgments.map(j => `📜${j.name}`).join(' ') : '';
 
     let roleBadge = '';
@@ -789,9 +915,9 @@ function renderGame() {
 
     return `<div class="opponent-card ${isCurrent?'is-current':''} ${isDead?'is-dead':''} ${canTarget?'is-target-selectable':''} ${isLowHp?'low-hp':''}" data-pid="${p.id}">
       <div class="opp-header">
-        <div class="opp-portrait">${p.hero ? heroPortraitSmall(p.hero) : '?'}</div>
+        <div class="opp-portrait">${p.hero ? heroClickTag(p.hero, 'small', p.name) : '?'}</div>
         <div>
-          <div class="opp-name">${p.name} ${roleBadge}</div>
+          <div class="opp-name">${p.name} ${roleBadge}${p.disconnected ? ' <span style="color:#aaa;font-size:10px">(离线)</span>' : ''}</div>
           <div class="opp-hero">${p.hero ? HERO_NAMES[p.hero] : ''} ${p.skill ? '【'+p.skill+'】' : ''}</div>
         </div>
       </div>
@@ -871,20 +997,8 @@ function renderGame() {
 
   // ---- Action buttons ----
   $('#btnEndTurn').style.display = (isMyTurn && !pa) ? '' : 'none';
-  // Show "跳过" button when there's a pendingAction and this player is involved
-  const canForceSkip = pa && (
-    isMyTurn ||
-    myPendingResponse ||
-    (pa.source === state.myId) ||
-    (pa.playerId === state.myId) ||
-    (pa.target === state.myId) ||
-    (pa.attackerId === state.myId) ||
-    (pa.daqiaoId === state.myId) ||
-    (pa.targets && pa.targets[pa.currentIdx] === state.myId) ||
-    (pa.kingdomPlayers && pa.kingdomPlayers[pa.currentAskerIdx] === state.myId) ||
-    (pa.askOrder && pa.askOrder[pa.currentAskerIdx] === state.myId) ||
-    (pa.players && pa.players[pa.currentIdx] === state.myId)
-  );
+  // Show "跳过" button only for admin when there's a stuck pendingAction
+  const canForceSkip = state.isAdmin && pa;
   $('#btnForceSkip').style.display = canForceSkip ? '' : 'none';
   const isChooseAction = pa && (pa.type === 'choose_dismantle' || pa.type === 'choose_snatch') && pa.source === state.myId;
   const isFanjianGuess = pa && pa.type === 'fanjian_guess' && pa.targetId === state.myId;
@@ -1100,10 +1214,10 @@ function renderGame() {
     myHpPips += `<div class="my-hp-pip ${i < me.hp ? 'filled' : ''}"></div>`;
   }
   let myEquip = '';
-  if (me.equipment?.weapon) myEquip += `⚔ ${me.equipment.weapon.name} `;
-  if (me.equipment?.armor) myEquip += `🛡 ${me.equipment.armor.name} `;
-  if (me.equipment?.plusHorse) myEquip += `🐎+1 ${me.equipment.plusHorse.name} `;
-  if (me.equipment?.minusHorse) myEquip += `🐎-1 ${me.equipment.minusHorse.name} `;
+  myEquip += equipTag('⚔', me.equipment?.weapon);
+  myEquip += equipTag('🛡', me.equipment?.armor);
+  myEquip += equipTag('🐎+1', me.equipment?.plusHorse);
+  myEquip += equipTag('🐎-1', me.equipment?.minusHorse);
   let myJudge = (me.judgments && me.judgments.length > 0) ? me.judgments.map(j => `📜${j.name}`).join(' ') : '';
   const wineActive = state.turnWineUsed && isMyTurn;
   const myLowHp = me.alive !== false && me.hp <= 1 && me.hp > 0;
@@ -1115,13 +1229,14 @@ function renderGame() {
   }
 
   $('#myInfo').innerHTML = `
-    <div class="my-portrait">${me.hero ? heroPortraitSVG(me.hero, 48) : '?'}</div>
+    <div class="my-portrait">${me.hero ? heroClickTag(me.hero, 48, me.name) : '?'}</div>
     <div class="my-details">
       <div class="my-name-hero">
         ${me.name}
         <span class="hero-label">${me.hero ? HERO_NAMES[me.hero] : ''}</span>
         <span class="my-role-badge ${ROLE_CLASS[me.role]}">${ROLE_NAMES[me.role]}</span>
         ${wineActive ? '<span class="wine-badge">🍺 酒</span>' : ''}
+        ${me.alive === false ? '<span class="spectator-badge">观战中</span>' : ''}
       </div>
       <div class="my-hp-bar">${myHpPips}</div>
       ${myEquip ? `<div class="my-equip">${myEquip}</div>` : ''}
@@ -1140,10 +1255,13 @@ function renderGame() {
     const isDiscardSelected = discardSelection.has(c.id);
     const isZhihengSelected = zhihengHandSelection.has(c.id);
     const isGsfSelected = gsfHandSelection.has(c.id);
+    const imgSrc = getCardImg(c);
     return `<div class="hand-card ${typeClass} ${isSelected ? 'selected' : ''} ${isDiscardSelected ? 'discard-selected' : ''} ${isZhihengSelected || isGsfSelected ? 'discard-selected' : ''}" data-cid="${c.id}" data-subtype="${c.subtype}">
-      <div class="card-suit-number ${isRed ? 'red' : 'black'}">${c.suit}${c.number}</div>
-      <div class="card-name">${c.name}</div>
-      <div class="card-type-label">${typeLabel}</div>
+      ${imgSrc ? `<div class="card-art"><img src="${imgSrc}" alt="${c.name}" draggable="false"></div>` : ''}
+      <div class="card-header">
+        <span class="card-suit-number ${isRed ? 'red' : 'black'}">${c.suit}${c.number}</span>
+        <span class="card-name-inline">${c.name}</span>
+      </div>
     </div>`;
   }).join('');
 
@@ -1247,11 +1365,35 @@ function renderGameOver() {
   const winLog = state.log.find(l => l.msg.includes('获胜'));
   $('#winnerText').textContent = winLog ? winLog.msg : '游戏结束';
 
+  const isHost = state.myId === state.hostId;
+  const connectedCount = state.players.filter(p => !p.disconnected).length;
+
   $('#finalRoles').innerHTML = state.players.map(p =>
-    `<div class="final-role-entry">
-      ${p.name} — ${p.hero ? HERO_NAMES[p.hero] : '?'} — ${ROLE_NAMES[p.role]} ${p.alive ? '✓ 存活' : '✗ 阵亡'}
+    `<div class="final-role-entry ${p.disconnected ? 'disconnected' : ''}">
+      ${p.name} — ${p.hero ? HERO_NAMES[p.hero] : '?'} — ${ROLE_NAMES[p.role]} ${p.alive ? '✓ 存活' : '✗ 阵亡'}${p.disconnected ? ' (已离开)' : ''}
     </div>`
   ).join('');
+
+  // Show restart button for host
+  let restartBtn = document.getElementById('btnRestart');
+  if (!restartBtn) {
+    restartBtn = document.createElement('button');
+    restartBtn.id = 'btnRestart';
+    restartBtn.className = 'btn btn-gold';
+    restartBtn.textContent = '再来一局';
+    restartBtn.onclick = () => socket.emit('restartGame');
+    $('#btnBackLobby').parentNode.insertBefore(restartBtn, $('#btnBackLobby'));
+  }
+  if (isHost && connectedCount >= 2) {
+    restartBtn.style.display = '';
+    restartBtn.textContent = `再来一局 (${connectedCount}人)`;
+  } else if (isHost) {
+    restartBtn.style.display = '';
+    restartBtn.disabled = true;
+    restartBtn.textContent = '等待更多玩家...';
+  } else {
+    restartBtn.style.display = 'none';
+  }
 }
 
 // ====== GAME BOARD WATERMARK (Canvas) ======
