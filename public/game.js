@@ -344,6 +344,16 @@ function getCardImg(card) {
   return CARD_IMG[card.subtype] || '';
 }
 
+const HERO_NAMES = {
+  liubei:'刘备', guanyu:'关羽', zhangfei:'张飞', zhugeliang:'诸葛亮', zhaoyun:'赵云',
+  machao:'马超', huangyueying:'黄月英',
+  caocao:'曹操', simayi:'司马懿', xiaohoudun:'夏侯惇', zhangliao:'张辽', xuchu:'许褚',
+  guojia:'郭嘉', zhenji:'甄姬',
+  sunquan:'孙权', ganning:'甘宁', lvmeng:'吕蒙', huanggai:'黄盖', zhouyu:'周瑜',
+  daqiao:'大乔', luxun:'陆逊', sunshangxiang:'孙尚香',
+  lvbu:'吕布', huatuo:'华佗', diaochan:'貂蝉', huaxiong:'华雄',
+};
+
 // Hero portrait as real image (with fallback to colored circle)
 function heroPortraitSVG(heroKey, size) {
   const s = size || 48;
@@ -357,15 +367,6 @@ Object.keys(HERO_NAMES).forEach(k => { HERO_PORTRAITS[k] = heroPortraitSVG(k, 48
 function heroPortraitSmall(heroKey) { return heroPortraitSVG(heroKey, 36); }
 function heroPortraitLarge(heroKey) { return heroPortraitSVG(heroKey, 72); }
 
-const HERO_NAMES = {
-  liubei:'刘备', guanyu:'关羽', zhangfei:'张飞', zhugeliang:'诸葛亮', zhaoyun:'赵云',
-  machao:'马超', huangyueying:'黄月英',
-  caocao:'曹操', simayi:'司马懿', xiaohoudun:'夏侯惇', zhangliao:'张辽', xuchu:'许褚',
-  guojia:'郭嘉', zhenji:'甄姬',
-  sunquan:'孙权', ganning:'甘宁', lvmeng:'吕蒙', huanggai:'黄盖', zhouyu:'周瑜',
-  daqiao:'大乔', luxun:'陆逊', sunshangxiang:'孙尚香',
-  lvbu:'吕布', huatuo:'华佗', diaochan:'貂蝉', huaxiong:'华雄',
-};
 const ROLE_NAMES = { lord:'主公', loyalist:'忠臣', rebel:'反贼', spy:'内奸' };
 const ROLE_CLASS = { lord:'role-lord', loyalist:'role-loyalist', rebel:'role-rebel', spy:'role-spy' };
 
